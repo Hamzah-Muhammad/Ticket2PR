@@ -19,7 +19,7 @@ This is a demo of how to give an LLM agent real write access to a codebase *safe
 flowchart LR
     A[TaskSource<br/>GitHubIssuesSource] -->|Task list| B[Orchestrator<br/>agent/runner.py]
     B -->|git checkout -B agent/issue-N| C[(sandboxed<br/>target repo)]
-    B -->|one query() turn,<br/>cwd-jailed, Bash guardrail hook| D[Claude Agent SDK]
+    B -->|one query() turn,<br/>cwd-scoped, Bash guardrail hook| D[Claude Agent SDK]
     D -->|Read / Write / Edit / Bash| C
     B -->|git diff check| C
     B -->|commit + push| E[GitHub branch]
@@ -53,12 +53,13 @@ The target repo must already be a local git clone with an `origin` remote pointi
 
 ## Demo
 
-Run live against [`ticket-to-pr-demo`](https://github.com/Hamzah-Muhammad/ticket-to-pr-demo), a small seeded repo:
+Run live against [`ticket-to-pr-demo`](https://github.com/Hamzah-Muhammad/ticket-to-pr-demo), a small seeded repo — three `agent-ready` issues, three real PRs, agent-authored end to end:
 
-<!-- TODO: replace with real PR links after the live run -->
-- PR #1: _pending_
-- PR #2: _pending_
-- PR #3: _pending_
+- [PR #7 — `divide()` should raise a clear error on division by zero](https://github.com/Hamzah-Muhammad/ticket-to-pr-demo/pull/7)
+- [PR #8 — `first_n()` returns one fewer item than requested](https://github.com/Hamzah-Muhammad/ticket-to-pr-demo/pull/8)
+- [PR #9 — Add a LICENSE file](https://github.com/Hamzah-Muhammad/ticket-to-pr-demo/pull/9) (opened manually — see below)
+
+**A real bug the live run surfaced:** for the LICENSE issue, the model wrote the file one directory above the target repo instead of at its root. `cwd` on `ClaudeAgentOptions` sets the *working directory convention* the model reasons from — it is not a filesystem jail, so nothing stopped an absolute/relative path from resolving outside the repo. The git-lifecycle guardrail (this file never touches git/gh) worked exactly as designed and correctly produced no commit/PR from that run; the gap is that Write/Edit have no equivalent boundary. Left in on purpose as an honest example of what "sandboxed" does and doesn't mean here — a path-jailing `PreToolUse` hook on `Write`/`Edit` is the fix, tracked as a follow-up.
 
 ## Project layout
 

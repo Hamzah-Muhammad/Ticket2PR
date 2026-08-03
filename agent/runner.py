@@ -70,11 +70,25 @@ async def _run_agent_turn(repo_path: Path, task: Task) -> list[str]:
     return lines
 
 
+def _default_branch(repo_path: Path) -> str:
+    result = subprocess.run(
+        ["gh", "repo", "view", "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"],
+        capture_output=True, text=True, check=True, cwd=str(repo_path),
+    )
+    return result.stdout.strip()
+
+
 async def run_task(repo_path: Path, task: Task, dry_run: bool = True) -> RunResult:
     branch = f"agent/issue-{task.id}"
-    log: list[str] = [f"Checking out {branch}"]
+    base = _default_branch(repo_path)
+    log: list[str] = [f"Checking out {branch} from {base}"]
 
-    _run_git(repo_path, "checkout", "-B", branch)
+    # Every task branches from a freshly-updated base branch, never from
+    # wherever HEAD happens to be left after a previous task — otherwise
+    # sequential runs would stack each issue's diff on top of the last one's.
+    _run_git(repo_path, "checkout", base)
+    _run_git(repo_path, "pull", "--ff-only")
+    _run_git(repo_path, "checkout", "-B", branch, base)
 
     log.append("Running agent turn")
     log.extend(await _run_agent_turn(repo_path, task))
@@ -94,7 +108,11 @@ async def run_task(repo_path: Path, task: Task, dry_run: bool = True) -> RunResu
 
     _run_git(repo_path, "add", "-A")
     _run_git(repo_path, "commit", "-m", f"Closes #{task.id}: {task.title}")
-    _run_git(repo_path, "push", "-u", "origin", branch, "--force-with-lease")
+    # Push HEAD explicitly (not the local branch name): Claude Code's own
+    # session checkpointing has been observed to switch HEAD to an auxiliary
+    # branch mid-turn, which would silently strand our commit if we pushed
+    # `branch` by name instead of by ref.
+    _run_git(repo_path, "push", "-u", "origin", f"HEAD:{branch}", "--force-with-lease")
 
     pr = subprocess.run(
         [
