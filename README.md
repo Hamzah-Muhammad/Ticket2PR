@@ -55,11 +55,13 @@ The target repo must already be a local git clone with an `origin` remote pointi
 
 Run live against [`ticket-to-pr-demo`](https://github.com/Hamzah-Muhammad/ticket-to-pr-demo), a small seeded repo — three `agent-ready` issues, three real PRs, agent-authored end to end:
 
-- [PR #7 — `divide()` should raise a clear error on division by zero](https://github.com/Hamzah-Muhammad/ticket-to-pr-demo/pull/7)
-- [PR #8 — `first_n()` returns one fewer item than requested](https://github.com/Hamzah-Muhammad/ticket-to-pr-demo/pull/8)
-- [PR #9 — Add a LICENSE file](https://github.com/Hamzah-Muhammad/ticket-to-pr-demo/pull/9) (opened manually — see below)
+- [PR #10 — Add a LICENSE file](https://github.com/Hamzah-Muhammad/ticket-to-pr-demo/pull/10)
+- [PR #11 — `first_n()` returns one fewer item than requested](https://github.com/Hamzah-Muhammad/ticket-to-pr-demo/pull/11)
+- [PR #12 — `divide()` should raise a clear error on division by zero](https://github.com/Hamzah-Muhammad/ticket-to-pr-demo/pull/12)
 
-**A real bug the live run surfaced:** for the LICENSE issue, the model wrote the file one directory above the target repo instead of at its root. `cwd` on `ClaudeAgentOptions` sets the *working directory convention* the model reasons from — it is not a filesystem jail, so nothing stopped an absolute/relative path from resolving outside the repo. The git-lifecycle guardrail (this file never touches git/gh) worked exactly as designed and correctly produced no commit/PR from that run; the gap is that Write/Edit have no equivalent boundary. Left in on purpose as an honest example of what "sandboxed" does and doesn't mean here — a path-jailing `PreToolUse` hook on `Write`/`Edit` is the fix, tracked as a follow-up.
+Each diff touches only what its issue asked for — notably, PR #12's agent turn noticed the *unrelated* pre-existing `test_first_n` failure (issue #11's bug, not yet merged) and correctly left it alone rather than fixing something out of scope.
+
+**A real bug the live run surfaced:** the first live pass produced PRs with diffs stacked on top of each other (issue B's PR contained issue A's changes too) because `agent/runner.py` created each new branch from whatever `HEAD` happened to be after the previous task, instead of from a freshly-updated `main`. A second bug then showed up once that was fixed: mid-turn, `HEAD` can drift off the branch the harness checked out (observed moving to an auxiliary branch during a Claude Code session) — pushing by local branch name silently stranded the commit on the wrong ref instead of erroring. The fix for both is in `agent/runner.py`: always rebase each new branch from a freshly-pulled `main`, and push with `git push origin HEAD:<branch>` rather than trusting whatever branch is locally checked out. Left this in the README on purpose — the interesting failure mode in agent tooling usually isn't the model, it's the surrounding automation's assumptions about state.
 
 ## Project layout
 
