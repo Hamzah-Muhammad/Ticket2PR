@@ -4,27 +4,33 @@ An autonomous coding agent, built on the [Claude Agent SDK](https://docs.claude.
 
 Point it at a git repo and a labeled issue queue; it checks out a branch per issue, lets Claude implement and test the fix inside a sandboxed working tree, and — if the change is real — commits, pushes, and opens a PR for a human to review. It never merges anything itself.
 
-## Why this exists
+## Quick start
 
-This is a demo of how to give an LLM agent real write access to a codebase *safely*. The interesting engineering here isn't "call the model" — it's the boundary around it:
-
-- **The agent never touches git or GitHub.** Its tool surface is `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash` — and a `PreToolUse` hook (`agent/guardrails.py`) blocks every `git` and `gh` invocation the model might attempt through Bash. Branch creation, commit, push, and PR creation are deterministic Python in `agent/runner.py`, not model output. Agents are good at fuzzy judgment (what code to write); plain code is better at repeatable, auditable steps (the git lifecycle).
-- **Every change lands as a PR, never a commit to `main`.** A human reviews before anything merges.
-- **The task source is pluggable.** `tasks/base.py` defines a `TaskSource` protocol; `tasks/github_source.py` is the one shipped implementation (reads GitHub Issues via `gh`, so anyone can clone this and run it with zero extra credentials beyond their existing `gh auth login`). The same interface could back a `JiraSource` or `LinearSource` without touching the orchestrator.
-- **Turns are capped** (`max_turns=30`) and **dry-run is the recommended first run** — see the change before anything is pushed.
-
-## Architecture
-
-```mermaid
-flowchart LR
-    A[TaskSource<br/>GitHubIssuesSource] -->|Task list| B[Orchestrator<br/>agent/runner.py]
-    B -->|git checkout -B agent/issue-N| C[(sandboxed<br/>target repo)]
-    B -->|one query() turn,<br/>cwd-scoped, Bash guardrail hook| D[Claude Agent SDK]
-    D -->|Read / Write / Edit / Bash| C
-    B -->|git diff check| C
-    B -->|commit + push| E[GitHub branch]
-    B -->|gh pr create| F[Pull Request]
 ```
+python -m venv venv
+venv\Scripts\python -m pip install -r requirements.txt
+gh auth login
+```
+
+Then either double-click **`run.bat`**, or from a terminal:
+
+```
+run.bat --dry-run
+```
+
+That runs against whatever repo is set in `config.py` (ships pointed at the demo repo below) without pushing anything, so you can see what it would do first.
+
+## Configuration — where the keys and settings live
+
+There's no API key to paste in anywhere, on purpose:
+
+| Setting | Where it lives |
+| --- | --- |
+| Which repo / label to run against by default | **`config.py`** — edit `DEFAULT_TARGET_REPO` and `DEFAULT_LABEL` |
+| GitHub auth | Your existing `gh` CLI login. Check with `gh auth status`, set up with `gh auth login`. Nothing is stored in this repo. |
+| Claude auth | Rides your Claude Code login automatically. To use API billing instead, copy **`.env.example`** to `.env` and set `ANTHROPIC_API_KEY` there (`.env` is gitignored, never committed) |
+
+Every `config.py` default can still be overridden per-run with a CLI flag.
 
 ## How it works
 
@@ -52,48 +58,55 @@ The agent never merges anything or touches `main` directly - every result is a P
 
 Tasks are GitHub issues with a label (`agent-ready` by default). To give it work on any repo:
 
-1. Open an issue on that repo describing the change, as specifically as you'd write it for a junior engineer - e.g. "`divide()` should raise `ValueError` on division by zero, add a test for it."
+1. Open an issue describing the change, as specifically as you'd write it for a junior engineer - e.g. "`divide()` should raise `ValueError` on division by zero, add a test for it."
 2. Label it `agent-ready` (`gh issue create --label agent-ready ...`, or add the label in the GitHub UI).
 
 That's it - no special format required, the issue title + body become the agent's prompt directly.
 
-## Setup
+## Running it
 
 ```
-python -m venv venv
-venv\Scripts\python -m pip install -r requirements.txt
-gh auth login          # if you haven't already
+# Recommended first run: see the diff, nothing pushed
+run.bat --dry-run
+
+# Run for real against every open "agent-ready" issue on the config.py repo
+run.bat
+
+# Everything below also works with venv\Scripts\python main.py instead of run.bat
+run.bat --target-repo C:\path\to\other\repo --dry-run
+run.bat --issue 3
+run.bat --label ready-for-agent
 ```
-
-Auth for the model rides your existing Claude Code login — no API key needed (falls back to `ANTHROPIC_API_KEY` if set).
-
-## Usage
-
-```
-# See what it would do, without pushing or opening a PR (recommended first run)
-venv\Scripts\python main.py --target-repo C:\path\to\local\clone --dry-run
-
-# Run for real against every open issue labeled "agent-ready"
-venv\Scripts\python main.py --target-repo C:\path\to\local\clone
-
-# Run a single issue
-venv\Scripts\python main.py --target-repo C:\path\to\local\clone --issue 3
-
-# Use a different label
-venv\Scripts\python main.py --target-repo C:\path\to\local\clone --label ready-for-agent
-```
-
-Flags:
 
 | Flag | Meaning |
 | --- | --- |
-| `--target-repo` | Path to a local clone you already have, with `origin` pointing at GitHub and push access |
-| `--dry-run` | Make the code changes but stop before commit/push/PR, so you can inspect the diff first |
-| `--issue N` | Only process issue `N`, instead of every open `agent-ready` issue |
-| `--label` | Which issue label to treat as the task queue (default: `agent-ready`) |
+| `--target-repo` | Path to a local clone with `origin` pointing at GitHub and push access (default: `config.py`) |
+| `--dry-run` | Make the code changes but stop before commit/push/PR |
+| `--issue N` | Only process issue `N`, instead of every open labeled issue |
+| `--label` | Which issue label counts as the task queue (default: `config.py`) |
 | `--repo-slug` | Override the `owner/repo` used for `gh` calls (defaults to the target repo's `origin` remote) |
 
-No API key needed - auth rides your existing Claude Code login (falls back to `ANTHROPIC_API_KEY` if set). You do need `gh auth login` done once.
+## Why this exists
+
+This is a demo of how to give an LLM agent real write access to a codebase *safely*. The interesting engineering here isn't "call the model" — it's the boundary around it:
+
+- **The agent never touches git or GitHub.** Its tool surface is `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash` — and a `PreToolUse` hook (`agent/guardrails.py`) blocks every `git` and `gh` invocation the model might attempt through Bash. Branch creation, commit, push, and PR creation are deterministic Python in `agent/runner.py`, not model output. Agents are good at fuzzy judgment (what code to write); plain code is better at repeatable, auditable steps (the git lifecycle).
+- **Every change lands as a PR, never a commit to `main`.** A human reviews before anything merges.
+- **The task source is pluggable.** `tasks/base.py` defines a `TaskSource` protocol; `tasks/github_source.py` is the one shipped implementation. The same interface could back a `JiraSource` or `LinearSource` without touching the orchestrator.
+- **Turns are capped** (`max_turns=30`) and **dry-run is the recommended first run**.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    A[TaskSource<br/>GitHubIssuesSource] -->|Task list| B[Orchestrator<br/>agent/runner.py]
+    B -->|git checkout -B agent/issue-N| C[(sandboxed<br/>target repo)]
+    B -->|one query() turn,<br/>cwd-scoped, Bash guardrail hook| D[Claude Agent SDK]
+    D -->|Read / Write / Edit / Bash| C
+    B -->|git diff check| C
+    B -->|commit + push| E[GitHub branch]
+    B -->|gh pr create| F[Pull Request]
+```
 
 ## Demo
 
@@ -110,12 +123,14 @@ Each diff touches only what its issue asked for — notably, PR #12's agent turn
 ## Project layout
 
 ```
-tasks/base.py            Task dataclass + TaskSource protocol
-tasks/github_source.py   GitHubIssuesSource (gh CLI backed)
-agent/guardrails.py      Bash allow/block logic + PreToolUse hook
-agent/runner.py          Per-task orchestration: branch -> agent turn -> commit/push/PR
-main.py                  CLI entrypoint
-tests/                   pytest unit tests (guardrails + task-source parsing)
+config.py                 Edit this: default target repo + label
+run.bat                    Double-click to run with config.py defaults
+tasks/base.py              Task dataclass + TaskSource protocol
+tasks/github_source.py     GitHubIssuesSource (gh CLI backed)
+agent/guardrails.py        Bash allow/block logic + PreToolUse hook
+agent/runner.py            Per-task orchestration: branch -> agent turn -> commit/push/PR
+main.py                    CLI entrypoint (what run.bat calls)
+tests/                     pytest unit tests (guardrails + task-source parsing)
 ```
 
 ## Testing
