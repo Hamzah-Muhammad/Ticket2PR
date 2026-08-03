@@ -26,7 +26,7 @@ import anyio
 from dotenv import load_dotenv
 
 import config
-from agent.runner import run_task
+from agent.runner import repo_info, run_task
 from tasks.github_source import GitHubIssuesSource
 
 load_dotenv()  # picks up ANTHROPIC_API_KEY from .env if present; no-op otherwise
@@ -48,7 +48,7 @@ async def main() -> None:
     if not (repo_path / ".git").exists():
         raise SystemExit(f"{repo_path} is not a git repo - clone it locally first")
 
-    slug = args.repo_slug or _infer_slug(repo_path)
+    slug = args.repo_slug or repo_info(repo_path)[0]
     source = GitHubIssuesSource(repo=slug, label=args.label)
 
     tasks = [source.get_task(args.issue)] if args.issue else source.list_ready_tasks()
@@ -56,22 +56,26 @@ async def main() -> None:
         print(f"No open '{args.label}'-labeled issues found on {slug}.")
         return
 
+    failures: list[str] = []
     for task in tasks:
         print(f"\n=== #{task.id}: {task.title} ===")
-        result = await run_task(repo_path, task, dry_run=args.dry_run)
+        try:
+            result = await run_task(repo_path, task, dry_run=args.dry_run)
+        except Exception as exc:
+            # One issue failing (git conflict, a gh hiccup, ...) shouldn't take
+            # down the rest of the batch - log it and move on to the next task.
+            print(f"FAILED: {exc}")
+            failures.append(f"#{task.id}: {exc}")
+            continue
         for line in result.log:
             print(line)
         if result.pr_url:
             print(f"PR: {result.pr_url}")
 
-
-def _infer_slug(repo_path: Path) -> str:
-    import subprocess
-    result = subprocess.run(
-        ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
-        capture_output=True, text=True, check=True, cwd=str(repo_path),
-    )
-    return result.stdout.strip()
+    if failures:
+        print(f"\n{len(failures)} of {len(tasks)} issue(s) failed:")
+        for f in failures:
+            print(f"  - {f}")
 
 
 if __name__ == "__main__":
