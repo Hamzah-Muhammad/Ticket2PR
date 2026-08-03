@@ -26,6 +26,37 @@ flowchart LR
     B -->|gh pr create| F[Pull Request]
 ```
 
+## How it works
+
+```
+GitHub Issues (labeled "agent-ready")
+        |
+        v
+tasks/github_source.py  ->  reads issues via `gh issue list`
+        |
+        v
+agent/runner.py  ->  for each issue:
+   1. git checkout -B agent/issue-N  (fresh branch off main)
+   2. one Claude Agent SDK turn, working directory locked to your repo
+      - can Read/Write/Edit files, run Bash (tests, linters, etc.)
+      - cannot run git or gh at all - blocked by a hook (agent/guardrails.py)
+   3. if real changes exist: commit -> push -> gh pr create
+        |
+        v
+   A real PR, for you to review and merge yourself
+```
+
+The agent never merges anything or touches `main` directly - every result is a PR sitting there for human review.
+
+## Feeding it tasks
+
+Tasks are GitHub issues with a label (`agent-ready` by default). To give it work on any repo:
+
+1. Open an issue on that repo describing the change, as specifically as you'd write it for a junior engineer - e.g. "`divide()` should raise `ValueError` on division by zero, add a test for it."
+2. Label it `agent-ready` (`gh issue create --label agent-ready ...`, or add the label in the GitHub UI).
+
+That's it - no special format required, the issue title + body become the agent's prompt directly.
+
 ## Setup
 
 ```
@@ -39,7 +70,7 @@ Auth for the model rides your existing Claude Code login — no API key needed (
 ## Usage
 
 ```
-# See what it would do, without pushing or opening a PR
+# See what it would do, without pushing or opening a PR (recommended first run)
 venv\Scripts\python main.py --target-repo C:\path\to\local\clone --dry-run
 
 # Run for real against every open issue labeled "agent-ready"
@@ -47,9 +78,22 @@ venv\Scripts\python main.py --target-repo C:\path\to\local\clone
 
 # Run a single issue
 venv\Scripts\python main.py --target-repo C:\path\to\local\clone --issue 3
+
+# Use a different label
+venv\Scripts\python main.py --target-repo C:\path\to\local\clone --label ready-for-agent
 ```
 
-The target repo must already be a local git clone with an `origin` remote pointing at GitHub, and you need push access.
+Flags:
+
+| Flag | Meaning |
+| --- | --- |
+| `--target-repo` | Path to a local clone you already have, with `origin` pointing at GitHub and push access |
+| `--dry-run` | Make the code changes but stop before commit/push/PR, so you can inspect the diff first |
+| `--issue N` | Only process issue `N`, instead of every open `agent-ready` issue |
+| `--label` | Which issue label to treat as the task queue (default: `agent-ready`) |
+| `--repo-slug` | Override the `owner/repo` used for `gh` calls (defaults to the target repo's `origin` remote) |
+
+No API key needed - auth rides your existing Claude Code login (falls back to `ANTHROPIC_API_KEY` if set). You do need `gh auth login` done once.
 
 ## Demo
 
