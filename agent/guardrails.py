@@ -1,19 +1,28 @@
-"""Safety rails for the agent's Bash access.
+"""Safety rails for the agent's Bash and Write/Edit access.
 
-Two layers:
-1. `blocked_reason()` — pure, unit-testable logic: given a shell command string,
-   returns why it's blocked, or None if it's fine.
-2. `bash_guardrail_hook()` — a PreToolUse hook (see claude_agent_sdk hooks) that
-   calls #1 on every Bash tool call the agent makes, *before* it runs, and denies
-   it if blocked. PreToolUse fires for every Bash call regardless of allowed_tools,
-   unlike can_use_tool (which is skipped for tools already auto-allowed) — that's
-   why this ships as a hook and not a permission callback.
+Two independent guardrails, both wired as PreToolUse hooks (see
+claude_agent_sdk hooks) because PreToolUse fires for every matching tool call
+regardless of allowed_tools — unlike can_use_tool, which is skipped for tools
+already auto-allowed:
+
+1. `blocked_reason()` / `bash_guardrail_hook()` — blocks git/gh and other
+   dangerous shell commands. This is a text blocklist, not real sandboxing:
+   see the README's "Known limitations" section for what that does and
+   doesn't cover.
+2. `path_jail_reason()` / `make_path_jail_hook()` — blocks Write/Edit from
+   touching anything outside the target repo, and specifically blocks direct
+   writes under `.git/`. This exists because `cwd` on ClaudeAgentOptions is
+   only the working-directory *convention* the model reasons from, not a
+   filesystem jail — nothing else stops an absolute or `..`-traversal path
+   from resolving outside the repo, and a direct write to `.git/refs/...`
+   would be a clean bypass of guardrail #1 (it never touches the `git`
+   binary at all).
 """
 
 from __future__ import annotations
 
 import re
-from typing import Any
+from pathlib import Path
 
 from claude_agent_sdk import HookContext, HookInput, HookJSONOutput
 
@@ -62,3 +71,57 @@ async def bash_guardrail_hook(
             "permissionDecisionReason": f"Blocked by guardrails: {reason}",
         }
     }
+
+
+def path_jail_reason(file_path: str, repo_root: Path) -> str | None:
+    """Return why writing to `file_path` is blocked, or None if it's fine.
+
+    Blocked when the resolved path falls outside `repo_root`, or lands inside
+    `repo_root/.git` (writing git internals directly, bypassing the Bash
+    guardrail entirely since it never invokes the `git` binary).
+    """
+    if not file_path:
+        return None
+
+    root = repo_root.resolve()
+    candidate = Path(file_path)
+    resolved = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
+
+    try:
+        rel = resolved.relative_to(root)
+    except ValueError:
+        return f"{resolved} resolves outside the target repo ({root})"
+
+    if ".git" in rel.parts:
+        return "writing inside .git/ directly is not allowed"
+
+    return None
+
+
+def make_path_jail_hook(repo_root: Path):
+    """Builds a PreToolUse hook for Write/Edit that enforces path_jail_reason()
+    against `repo_root`. A factory because the hook signature the SDK calls
+    has no room for extra arguments, so `repo_root` has to be captured in a
+    closure instead.
+    """
+
+    async def hook(
+        input_data: HookInput, tool_use_id: str | None, context: HookContext
+    ) -> HookJSONOutput:
+        if input_data.get("tool_name") not in ("Write", "Edit"):
+            return {}
+
+        file_path = (input_data.get("tool_input") or {}).get("file_path", "")
+        reason = path_jail_reason(file_path, repo_root)
+        if reason is None:
+            return {}
+
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": f"Blocked by guardrails: {reason}",
+            }
+        }
+
+    return hook

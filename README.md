@@ -91,9 +91,18 @@ run.bat --label ready-for-agent
 This is a demo of how to give an LLM agent real write access to a codebase *safely*. The interesting engineering here isn't "call the model" — it's the boundary around it:
 
 - **The agent never touches git or GitHub.** Its tool surface is `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash` — and a `PreToolUse` hook (`agent/guardrails.py`) blocks every `git` and `gh` invocation the model might attempt through Bash. Branch creation, commit, push, and PR creation are deterministic Python in `agent/runner.py`, not model output. Agents are good at fuzzy judgment (what code to write); plain code is better at repeatable, auditable steps (the git lifecycle).
+- **Write/Edit are path-jailed to the target repo.** `cwd` on `ClaudeAgentOptions` is only the working-directory *convention* the model reasons from — it does not restrict where `Write`/`Edit` can write. A second `PreToolUse` hook (`make_path_jail_hook` in `agent/guardrails.py`) resolves every `Write`/`Edit` target path and denies anything that lands outside the repo, or inside `.git/` directly (which would otherwise be a clean bypass of the git guardrail above). This isn't hypothetical — see the Demo section below.
 - **Every change lands as a PR, never a commit to `main`.** A human reviews before anything merges.
 - **The task source is pluggable.** `tasks/base.py` defines a `TaskSource` protocol; `tasks/github_source.py` is the one shipped implementation. The same interface could back a `JiraSource` or `LinearSource` without touching the orchestrator.
 - **Turns are capped** (`max_turns=30`) and **dry-run is the recommended first run**.
+
+## Known limitations
+
+Being upfront about what this does *not* protect against:
+
+- **The Bash guardrail is a text blocklist, not real sandboxing.** It pattern-matches the command string for `git`, `gh`, and a few other dangerous patterns. A differently-phrased command that reaches equivalent behavior without those literal words (e.g. a Python git library) would not be caught by it. The Claude Agent SDK does support real OS-level command sandboxing (`ClaudeAgentOptions.sandbox`), but it's explicitly macOS/Linux-only - not available on the Windows machine this was built and demoed on.
+- **Issue bodies are untrusted input fed straight into the prompt**, and nothing here restricts the agent's outbound network access (only piping-into-shell is blocked, not general `curl`/`wget`/etc. calls). On a repo where the public can open issues, a malicious issue body is a real prompt-injection surface. This project assumes trusted issue authors - don't point it at a repo where anyone can file issues without review.
+- Both guardrails **fail closed** (deny on anything unexpected) but are still two specific hooks, not a formal proof of containment. Treat them as raising the bar, not as a guarantee.
 
 ## Architecture
 
@@ -118,7 +127,11 @@ Run live against [`ticket-to-pr-demo`](https://github.com/Hamzah-Muhammad/ticket
 
 Each diff touches only what its issue asked for — notably, PR #12's agent turn noticed the *unrelated* pre-existing `test_first_n` failure (issue #11's bug, not yet merged) and correctly left it alone rather than fixing something out of scope.
 
-**A real bug the live run surfaced:** the first live pass produced PRs with diffs stacked on top of each other (issue B's PR contained issue A's changes too) because `agent/runner.py` created each new branch from whatever `HEAD` happened to be after the previous task, instead of from a freshly-updated `main`. A second bug then showed up once that was fixed: mid-turn, `HEAD` can drift off the branch the harness checked out (observed moving to an auxiliary branch during a Claude Code session) — pushing by local branch name silently stranded the commit on the wrong ref instead of erroring. The fix for both is in `agent/runner.py`: always rebase each new branch from a freshly-pulled `main`, and push with `git push origin HEAD:<branch>` rather than trusting whatever branch is locally checked out. Left this in the README on purpose — the interesting failure mode in agent tooling usually isn't the model, it's the surrounding automation's assumptions about state.
+**Three real bugs the live runs surfaced** — left in on purpose, since the interesting failure mode in agent tooling usually isn't the model, it's the surrounding automation's assumptions about state:
+
+1. The first live pass produced PRs with diffs stacked on top of each other (issue B's PR contained issue A's changes too), because `agent/runner.py` created each new branch from whatever `HEAD` happened to be after the previous task, instead of from a freshly-updated `main`. Fixed by always rebasing each new branch from a freshly-pulled `main`.
+2. Once that was fixed, mid-turn `HEAD` was observed drifting off the branch the harness checked out (onto an auxiliary branch during a Claude Code session) — pushing by local branch name silently stranded the commit on the wrong ref instead of erroring. Fixed by pushing `git push origin HEAD:<branch>` explicitly rather than trusting whatever branch is locally checked out.
+3. During the audit that added the Write/Edit path-jail hook (see "Why this exists" above), re-running the LICENSE issue live reproduced the exact bug that hook is designed to catch: the agent's first attempt wrote the file to the parent of the repo directory instead of inside it. The path-jail hook denied that write, the agent read the denial and self-corrected to the right path in the same turn, and the file ended up in the right place - confirmed by checking both locations on disk afterward.
 
 ## Project layout
 
@@ -127,10 +140,10 @@ config.py                 Edit this: default target repo + label
 run.bat                    Double-click to run with config.py defaults
 tasks/base.py              Task dataclass + TaskSource protocol
 tasks/github_source.py     GitHubIssuesSource (gh CLI backed)
-agent/guardrails.py        Bash allow/block logic + PreToolUse hook
+agent/guardrails.py        Bash allow/block logic + Write/Edit path-jail, both as PreToolUse hooks
 agent/runner.py            Per-task orchestration: branch -> agent turn -> commit/push/PR
-main.py                    CLI entrypoint (what run.bat calls)
-tests/                     pytest unit tests (guardrails + task-source parsing)
+main.py                    CLI entrypoint (what run.bat calls); isolates per-task failures
+tests/                     pytest unit tests (guardrails, path-jail, task-source parsing)
 ```
 
 ## Testing
