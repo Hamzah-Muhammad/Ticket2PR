@@ -1,4 +1,4 @@
-# TicketToPR
+# Ticket2PR
 
 An autonomous coding agent, built on the [Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/overview), that reads a backlog of tickets and opens real pull requests to resolve them.
 
