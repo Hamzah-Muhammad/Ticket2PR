@@ -4,33 +4,46 @@ An autonomous coding agent, built on the [Claude Agent SDK](https://docs.claude.
 
 Assign it an issue on a repo it's watching; it checks out a branch, lets Claude implement and test the fix inside a sandboxed working tree, and — if the change is real — commits, pushes, and opens a PR for a human to review. It never merges anything itself.
 
+**Stack:** a Python app that orchestrates two things it doesn't reimplement itself — GitHub (issues, branches, PRs, all via the `gh` CLI) and Claude (the actual coding, via Anthropic's Claude Agent SDK). Python's job is entirely the plumbing around those two: which issue to pick up, when to branch, when a change is real enough to commit, when to open the PR. Claude never touches git or GitHub directly — see [Why this exists](#why-this-exists) for how that boundary is enforced.
+
 ## Quick start
+
+**1. Install:**
 
 ```
 python -m venv venv
 venv\Scripts\python -m pip install -r requirements.txt
+```
+
+**2. Connect to GitHub** — the agent reads issues and opens PRs through the [`gh` CLI](https://cli.github.com/), riding whatever account you're already logged into. Nothing is stored in this repo:
+
+```
 gh auth login
 ```
 
-Then either double-click **`run.bat`**, or from a terminal:
+Check it worked any time with `gh auth status`.
+
+**3. Connect to Claude** — no setup needed if you already use Claude Code: the agent rides that same login automatically. If you'd rather run on API billing instead, copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY` there (`.env` is gitignored, never committed).
+
+**4. Run it** — either double-click **`run.bat`**, or from a terminal:
 
 ```
 run.bat --dry-run
 ```
 
-That runs against whatever repo is set in `config.py` (ships pointed at the demo repo below) without pushing anything, so you can see what it would do first.
+That runs against whatever repo is set in `config.py` (ships pointed at the demo repo below), lets Claude make the code changes, but stops before commit/push/PR — so you can see exactly what it would do first. Drop `--dry-run` once you're happy, and it pushes real branches and opens real PRs.
 
 ## Configuration — where the keys and settings live
 
-There's no API key to paste in anywhere, on purpose:
+There's no API key to paste in anywhere, on purpose — GitHub and Claude auth both ride your existing logins (Quick start, steps 2–3). The one thing you do edit directly is which repo/label to run against:
 
 | Setting | Where it lives |
 | --- | --- |
-| Which repo / label to run against by default | **`config.py`** — edit `DEFAULT_TARGET_REPO` and `DEFAULT_LABEL` |
-| GitHub auth | Your existing `gh` CLI login. Check with `gh auth status`, set up with `gh auth login`. Nothing is stored in this repo. |
-| Claude auth | Rides your Claude Code login automatically. To use API billing instead, copy **`.env.example`** to `.env` and set `ANTHROPIC_API_KEY` there (`.env` is gitignored, never committed) |
+| Default target repo + label | **`config.py`** — edit `DEFAULT_TARGET_REPO` and `DEFAULT_LABEL` |
+| GitHub auth | `gh auth login` / `gh auth status` — nothing stored in this repo |
+| Claude auth | Your Claude Code login, automatically — or `ANTHROPIC_API_KEY` in `.env` for API billing |
 
-Every `config.py` default can still be overridden per-run with a CLI flag.
+Every `config.py` default can still be overridden per-run with a CLI flag (see [Running it](#running-it)).
 
 ## How it works
 
@@ -119,11 +132,11 @@ flowchart LR
 
 ## Demo
 
-Run live against [`ticket-to-pr-demo`](https://github.com/Hamzah-Muhammad/ticket-to-pr-demo), a small seeded repo — three `agent-ready` issues, three real PRs, agent-authored end to end:
+Run live against [`ticket2pr-demo`](https://github.com/Hamzah-Muhammad/ticket2pr-demo), a small seeded repo — three `agent-ready` issues, three real PRs, agent-authored end to end:
 
-- [PR #10 — Add a LICENSE file](https://github.com/Hamzah-Muhammad/ticket-to-pr-demo/pull/10)
-- [PR #11 — `first_n()` returns one fewer item than requested](https://github.com/Hamzah-Muhammad/ticket-to-pr-demo/pull/11)
-- [PR #12 — `divide()` should raise a clear error on division by zero](https://github.com/Hamzah-Muhammad/ticket-to-pr-demo/pull/12)
+- [PR #10 — Add a LICENSE file](https://github.com/Hamzah-Muhammad/ticket2pr-demo/pull/10)
+- [PR #11 — `first_n()` returns one fewer item than requested](https://github.com/Hamzah-Muhammad/ticket2pr-demo/pull/11)
+- [PR #12 — `divide()` should raise a clear error on division by zero](https://github.com/Hamzah-Muhammad/ticket2pr-demo/pull/12)
 
 Each diff touches only what its issue asked for — notably, PR #12's agent turn noticed the *unrelated* pre-existing `test_first_n` failure (issue #11's bug, not yet merged) and correctly left it alone rather than fixing something out of scope.
 
