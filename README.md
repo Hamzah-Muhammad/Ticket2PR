@@ -1,8 +1,8 @@
 # Ticket2PR
 
-An autonomous coding agent, built on the [Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/overview), that reads a backlog of tickets and opens real pull requests to resolve them.
+An autonomous coding agent, built on the [Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/overview), that reads GitHub issues assigned to it and opens real pull requests to resolve them.
 
-Point it at a git repo and a labeled issue queue; it checks out a branch per issue, lets Claude implement and test the fix inside a sandboxed working tree, and — if the change is real — commits, pushes, and opens a PR for a human to review. It never merges anything itself.
+Assign it an issue on a repo it's watching; it checks out a branch, lets Claude implement and test the fix inside a sandboxed working tree, and — if the change is real — commits, pushes, and opens a PR for a human to review. It never merges anything itself.
 
 ## Quick start
 
@@ -35,7 +35,7 @@ Every `config.py` default can still be overridden per-run with a CLI flag.
 ## How it works
 
 ```
-GitHub Issues (labeled "agent-ready")
+GitHub Issues assigned to the agent (agent-ready label)
         |
         v
 tasks/github_source.py  ->  reads issues via `gh issue list`
@@ -56,10 +56,10 @@ The agent never merges anything or touches `main` directly - every result is a P
 
 ## Feeding it tasks
 
-Tasks are GitHub issues with a label (`agent-ready` by default). To give it work on any repo:
+Tasks are GitHub issues assigned to the agent. There's no bot account to hold a literal GitHub "Assignee," so a label (`agent-ready` by default) plays that role instead — it's how you hand the agent an issue and mark it ready to pick up. To give it work on any repo:
 
 1. Open an issue describing the change, as specifically as you'd write it for a junior engineer - e.g. "`divide()` should raise `ValueError` on division by zero, add a test for it."
-2. Label it `agent-ready` (`gh issue create --label agent-ready ...`, or add the label in the GitHub UI).
+2. Assign it to the agent by adding the `agent-ready` label (`gh issue create --label agent-ready ...`, or add the label in the GitHub UI).
 
 That's it - no special format required, the issue title + body become the agent's prompt directly.
 
