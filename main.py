@@ -1,4 +1,4 @@
-r"""TicketToPR - an agent that reads a backlog and opens PRs to resolve it.
+r"""Ticket2PR - an agent that reads a backlog and opens PRs to resolve it.
 
 Easiest way to run it: double-click run.bat (or `run.bat --dry-run` from a
 terminal) - it uses the defaults in config.py.
@@ -46,7 +46,11 @@ async def main() -> None:
     args = parse_args()
     repo_path: Path = args.target_repo.resolve()
     if not (repo_path / ".git").exists():
-        raise SystemExit(f"{repo_path} is not a git repo - clone it locally first")
+        raise SystemExit(
+            f"{repo_path} is not a git repo. Clone the target repo there first "
+            "(e.g. `gh repo clone Hamzah-Muhammad/ticket2pr-demo` next to this folder), "
+            "set DEFAULT_TARGET_REPO in config.py, or pass --target-repo."
+        )
 
     slug = args.repo_slug or repo_info(repo_path)[0]
     source = GitHubIssuesSource(repo=slug, label=args.label)

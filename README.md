@@ -1,5 +1,7 @@
 # Ticket2PR
 
+[![CI](https://github.com/Hamzah-Muhammad/Ticket2PR/actions/workflows/ci.yml/badge.svg)](https://github.com/Hamzah-Muhammad/Ticket2PR/actions/workflows/ci.yml) [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?logo=python&logoColor=white)](requirements.txt) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 An autonomous coding agent, built on the [Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/overview), that reads GitHub issues assigned to it and opens real pull requests to resolve them.
 
 Assign it an issue on a repo it's watching; it checks out a branch, lets Claude implement and test the fix inside a sandboxed working tree, and — if the change is real — commits, pushes, and opens a PR for a human to review. It never merges anything itself.
@@ -31,7 +33,7 @@ Check it worked any time with `gh auth status`.
 run.bat --dry-run
 ```
 
-That runs against whatever repo is set in `config.py` (ships pointed at the demo repo below), lets Claude make the code changes, but stops before commit/push/PR — so you can see exactly what it would do first. Drop `--dry-run` once you're happy, and it pushes real branches and opens real PRs.
+That runs against whatever repo is set in `config.py`. It ships pointed at the [demo repo](https://github.com/Hamzah-Muhammad/ticket2pr-demo) cloned as a **sibling folder** (`gh repo clone Hamzah-Muhammad/ticket2pr-demo` from the parent directory), or pass `--target-repo C:\path\to\any\clone`. It lets Claude make the code changes, but stops before commit/push/PR — so you can see exactly what it would do first. Drop `--dry-run` once you're happy, and it pushes real branches and opens real PRs.
 
 ## Configuration — where the keys and settings live
 
@@ -164,6 +166,8 @@ tests/                     pytest unit tests (guardrails, path-jail, task-source
 ```
 venv\Scripts\python -m pytest
 ```
+
+The same suite runs on every push via [GitHub Actions](.github/workflows/ci.yml) (Windows runner, Python 3.11 and 3.13).
 
 ## License
 

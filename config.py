@@ -13,8 +13,13 @@ Everything below is just a default; every value can still be overridden
 per-run with a CLI flag (e.g. `--target-repo`, `--label`).
 """
 
-# Local path to the repo the agent works on by default.
-DEFAULT_TARGET_REPO = r"C:\Apps\ticket-to-pr-demo"
+from pathlib import Path
+
+# Local path to the repo the agent works on by default. Ships pointed at the
+# demo repo (https://github.com/Hamzah-Muhammad/ticket2pr-demo) cloned as a
+# sibling folder of this one - point it at any local clone you have push
+# access to, or override per run with --target-repo.
+DEFAULT_TARGET_REPO = Path(__file__).resolve().parent.parent / "ticket2pr-demo"
 
 # Which issue label marks a task as ready for the agent to pick up.
 DEFAULT_LABEL = "agent-ready"
