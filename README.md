@@ -4,6 +4,10 @@
 
 An autonomous coding agent, built on the [Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/overview), that reads GitHub issues assigned to it and opens real pull requests to resolve them.
 
+![A pull request opened by the agent on the demo repo: titled "divide() should raise a clear error on division by zero (closes #2)", pushed to a branch named agent/issue-2, changing two files - the fix in utils.py and a new pytest case covering it](docs/generated-pr.png)
+
+*[PR #12](https://github.com/Hamzah-Muhammad/ticket2pr-demo/pull/12) on the demo repo — opened by the agent, not by hand. It read issue #2, branched as `agent/issue-2`, wrote the guard clause in `utils.py`, **and added a test covering it**, then linked the issue so merging closes it.*
+
 Assign it an issue on a repo it's watching; it checks out a branch, lets Claude implement and test the fix inside a sandboxed working tree, and — if the change is real — commits, pushes, and opens a PR for a human to review. It never merges anything itself.
 
 **Stack:** a Python app that orchestrates two things it doesn't reimplement itself — GitHub (issues, branches, PRs, all via the `gh` CLI) and Claude (the actual coding, via Anthropic's Claude Agent SDK). Python's job is entirely the plumbing around those two: which issue to pick up, when to branch, when a change is real enough to commit, when to open the PR. Claude never touches git or GitHub directly — see [Why this exists](#why-this-exists) for how that boundary is enforced.
