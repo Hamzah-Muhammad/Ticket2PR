@@ -14,6 +14,7 @@ import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -41,6 +42,9 @@ handled outside your turn. When you are done, stop; do not ask questions. \
 Your final message should be a short summary of what you changed and why, \
 suitable for a pull request description."""
 
+# Child processes must not pop console windows when run from the desktop app.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 # Hard cap on agent turns per issue, so a stuck agent stops rather than looping.
 MAX_TURNS = 30
 
@@ -63,6 +67,7 @@ def _run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         check=True,
+        creationflags=_NO_WINDOW,
     )
 
 
@@ -79,7 +84,13 @@ def discard_changes(repo_path: Path) -> None:
     _run_git(repo_path, "clean", "-fd")
 
 
-async def _run_agent_turn(repo_path: Path, task: Task, model: str | None = None) -> list[str]:
+async def _run_agent_turn(
+    repo_path: Path,
+    task: Task,
+    model: str | None = None,
+    on_log: Callable[[str], None] | None = None,
+    cli_path: Path | None = None,
+) -> list[str]:
     """Runs one sandboxed agent turn against the checked-out branch. Returns the
     agent's text output lines for logging and the PR body."""
     options = ClaudeAgentOptions(
@@ -94,6 +105,7 @@ async def _run_agent_turn(repo_path: Path, task: Task, model: str | None = None)
         },
         max_turns=MAX_TURNS,
         model=model,
+        cli_path=str(cli_path) if cli_path else None,
     )
     prompt = f"Issue #{task.id}: {task.title}\n\n{task.body}".strip()
 
@@ -103,6 +115,8 @@ async def _run_agent_turn(repo_path: Path, task: Task, model: str | None = None)
             for block in message.content:
                 if isinstance(block, TextBlock):
                     lines.append(block.text)
+                    if on_log:
+                        on_log(block.text)
     return lines
 
 
@@ -115,6 +129,7 @@ def repo_info(repo_path: Path) -> tuple[str, str]:
         text=True,
         check=True,
         cwd=str(repo_path),
+        creationflags=_NO_WINDOW,
     )
     data = json.loads(result.stdout)
     return data["nameWithOwner"], data["defaultBranchRef"]["name"]
@@ -142,6 +157,7 @@ def existing_pr_url(repo_path: Path, repo_slug: str, branch: str) -> str | None:
         text=True,
         check=True,
         cwd=str(repo_path),
+        creationflags=_NO_WINDOW,
     )
     prs = json.loads(result.stdout or "[]")
     return prs[0]["url"] if prs else None
@@ -165,11 +181,25 @@ def pr_body(task: Task, agent_lines: list[str]) -> str:
 
 
 async def run_task(
-    repo_path: Path, task: Task, dry_run: bool = True, model: str | None = None
+    repo_path: Path,
+    task: Task,
+    dry_run: bool = True,
+    model: str | None = None,
+    on_log: Callable[[str], None] | None = None,
+    cli_path: Path | None = None,
 ) -> RunResult:
+    """on_log, if given, receives every log line as it happens (the desktop app
+    streams it); the same lines are also returned in RunResult.log."""
     branch = f"agent/issue-{task.id}"
     repo_slug, base = repo_info(repo_path)
-    log: list[str] = [f"Checking out {branch} from {base}"]
+    log: list[str] = []
+
+    def note(line: str) -> None:
+        log.append(line)
+        if on_log:
+            on_log(line)
+
+    note(f"Checking out {branch} from {base}")
 
     # Every task branches from a freshly-updated base branch, never from
     # wherever HEAD happens to be left after a previous task - otherwise
@@ -178,20 +208,22 @@ async def run_task(
     _run_git(repo_path, "pull", "--ff-only")
     _run_git(repo_path, "checkout", "-B", branch, base)
 
-    log.append("Running agent turn")
-    agent_lines = await _run_agent_turn(repo_path, task, model=model)
+    note("Running agent turn")
+    agent_lines = await _run_agent_turn(
+        repo_path, task, model=model, on_log=on_log, cli_path=cli_path
+    )
     log.extend(agent_lines)
 
     changed = working_tree_dirty(repo_path)
 
     if not changed:
-        log.append("No changes produced - skipping commit/PR")
+        note("No changes produced - skipping commit/PR")
         return RunResult(task=task, branch=branch, changed=False, pr_url=None, log=log)
 
     if dry_run:
         diffstat = _run_git(repo_path, "diff", "--stat")
-        log.append("Dry run - changes made but not committed:")
-        log.append(diffstat.stdout)
+        note("Dry run - changes made but not committed:")
+        note(diffstat.stdout)
         return RunResult(task=task, branch=branch, changed=True, pr_url=None, log=log)
 
     _run_git(repo_path, "add", "-A")
@@ -204,7 +236,7 @@ async def run_task(
 
     already = existing_pr_url(repo_path, repo_slug, branch)
     if already:
-        log.append(f"PR already open for {branch}, updated by the push: {already}")
+        note(f"PR already open for {branch}, updated by the push: {already}")
         return RunResult(task=task, branch=branch, changed=True, pr_url=already, log=log)
 
     pr = subprocess.run(
@@ -225,7 +257,8 @@ async def run_task(
         text=True,
         check=True,
         cwd=str(repo_path),
+        creationflags=_NO_WINDOW,
     )
     pr_url = pr.stdout.strip()
-    log.append(f"Opened PR: {pr_url}")
+    note(f"Opened PR: {pr_url}")
     return RunResult(task=task, branch=branch, changed=True, pr_url=pr_url, log=log)

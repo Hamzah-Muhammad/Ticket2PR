@@ -14,9 +14,10 @@ class GitHubIssuesSource:
     ClaudeAiAgents/hello_agent.py uses for Claude Code login).
     """
 
-    def __init__(self, repo: str, label: str = "agent-ready"):
+    def __init__(self, repo: str, label: str = "agent-ready", assignee: str | None = None):
         self.repo = repo
         self.label = label
+        self.assignee = assignee  # optional GitHub login; the label is the queue either way
 
     def list_ready_tasks(self) -> list[Task]:
         result = subprocess.run(
@@ -30,8 +31,9 @@ class GitHubIssuesSource:
                 self.label,
                 "--state",
                 "open",
+                *(["--assignee", self.assignee] if self.assignee else []),
                 "--json",
-                "number,title,body,url",
+                "number,title,body,url,labels,updatedAt",
             ],
             capture_output=True,
             text=True,
@@ -49,7 +51,7 @@ class GitHubIssuesSource:
                 "--repo",
                 self.repo,
                 "--json",
-                "number,title,body,url",
+                "number,title,body,url,labels,updatedAt",
             ],
             capture_output=True,
             text=True,
@@ -64,4 +66,6 @@ class GitHubIssuesSource:
             title=item["title"],
             body=item.get("body") or "",
             url=item["url"],
+            labels=tuple(lbl.get("name", "") for lbl in item.get("labels") or []),
+            updated_at=item.get("updatedAt") or "",
         )

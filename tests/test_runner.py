@@ -29,7 +29,7 @@ def _fake_git(calls: list, porcelain: str = " M utils.py\n"):
     return run
 
 
-async def _fake_agent_turn(repo_path, task, model=None):
+async def _fake_agent_turn(repo_path, task, **_kwargs):
     return ["Looking at utils.py", "Added a ZeroDivisionError guard and a test."]
 
 

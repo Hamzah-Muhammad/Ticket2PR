@@ -12,6 +12,8 @@ class Task:
     title: str
     body: str
     url: str
+    labels: tuple[str, ...] = ()
+    updated_at: str = ""
 
 
 class TaskSource(Protocol):

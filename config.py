@@ -13,13 +13,23 @@ Everything below is just a default; every value can still be overridden
 per-run with a CLI flag (e.g. `--target-repo`, `--label`).
 """
 
+import sys
 from pathlib import Path
+
+# Where "next to this app" is: the repo folder when running from source, the
+# folder holding Ticket2PR.exe when frozen (PyInstaller unpacks into a temp dir,
+# so __file__ would point somewhere useless there).
+APP_DIR = (
+    Path(sys.executable).resolve().parent
+    if getattr(sys, "frozen", False)
+    else Path(__file__).resolve().parent
+)
 
 # Local path to the repo the agent works on by default. Ships pointed at the
 # demo repo (https://github.com/Hamzah-Muhammad/ticket2pr-demo) cloned as a
 # sibling folder of this one - point it at any local clone you have push
 # access to, or override per run with --target-repo.
-DEFAULT_TARGET_REPO = Path(__file__).resolve().parent.parent / "ticket2pr-demo"
+DEFAULT_TARGET_REPO = APP_DIR.parent / "ticket2pr-demo"
 
 # Which issue label marks a task as ready for the agent to pick up.
 DEFAULT_LABEL = "agent-ready"
