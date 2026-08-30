@@ -16,7 +16,7 @@ from tasks.base import Task
 TASK = Task(id="7", title="Fix divide", body="raise on zero", url="https://github.com/o/r/issues/7")
 
 
-def _fake_git(calls: list, porcelain: str = " M utils.py\n"):
+def _fake_git(calls: list, porcelain: str = " M utils.py\n", head: str = ""):
     def run(repo_path: Path, *args: str) -> subprocess.CompletedProcess:
         calls.append(args)
         out = ""
@@ -24,6 +24,8 @@ def _fake_git(calls: list, porcelain: str = " M utils.py\n"):
             out = porcelain
         elif args[:2] == ("diff", "--stat"):
             out = " utils.py | 1 +\n"
+        elif args[:1] == ("rev-parse",):
+            out = head or "agent/issue-7"
         return subprocess.CompletedProcess(args=args, returncode=0, stdout=out, stderr="")
 
     return run

@@ -52,6 +52,20 @@ MAX_TURNS = 30
 MAX_PR_SUMMARY_CHARS = 2000
 
 
+# Ticket2PR only ever writes to its own task branches, one per issue. These
+# names are refused as a push target even if something upstream of here goes
+# wrong; `main` and `master` are named explicitly so the rule holds on a repo
+# whose default branch is something else entirely.
+TASK_BRANCH_PREFIX = "agent/issue-"
+_NEVER_PUSH_TO = frozenset({"main", "master"})
+
+
+class SafetyRefusal(RuntimeError):
+    """Raised instead of committing or pushing when the branch state is not
+    exactly what this run created. Nothing has been committed or pushed when
+    it is raised, so a refusal is always safe to report and move on from."""
+
+
 @dataclass
 class RunResult:
     task: Task
@@ -69,6 +83,52 @@ def _run_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess:
         check=True,
         creationflags=_NO_WINDOW,
     )
+
+
+def _current_branch(repo_path: Path) -> str:
+    """The branch HEAD is actually on ("HEAD" when detached)."""
+    return _run_git(repo_path, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+
+
+def assert_writable_branch(branch: str, base: str) -> None:
+    """Refuse a task branch that is not one of ours, or that is a branch we
+    must never write to.
+
+    The branch name is built from GitHub's own integer issue number, so this
+    cannot normally fire - it is here so that the "never push to the default
+    branch" property is enforced by an assertion rather than only implied by
+    how the name happens to be constructed.
+    """
+    name = branch.strip()
+    if not name.startswith(TASK_BRANCH_PREFIX):
+        raise SafetyRefusal(
+            f"Refusing to work on '{branch}': Ticket2PR only writes to "
+            f"'{TASK_BRANCH_PREFIX}<issue>' branches."
+        )
+    if name.lower() in _NEVER_PUSH_TO | {base.strip().lower()}:
+        raise SafetyRefusal(
+            f"Refusing to work on '{branch}': it is the repository's default branch "
+            f"('{base}') or a protected branch. Ticket2PR opens pull requests; it never "
+            "commits or pushes to the branch it targets."
+        )
+
+
+def assert_head_is_task_branch(repo_path: Path, branch: str) -> None:
+    """Refuse to commit unless HEAD is still on the branch this run created.
+
+    Claude Code's session checkpointing has been seen to move HEAD mid-turn.
+    If it landed back on the base branch, `git add -A && git commit` would put
+    the agent's work straight onto local `main` - exactly what this tool must
+    never do - and the later `push HEAD:<branch>` would then push that branch's
+    tip under the task branch's name.
+    """
+    current = _current_branch(repo_path)
+    if current != branch.strip():
+        raise SafetyRefusal(
+            f"Refusing to commit: HEAD is on '{current}', not the task branch '{branch}'. "
+            "Something moved HEAD during the agent turn. Nothing was committed or pushed; "
+            "the changes are still in the working tree."
+        )
 
 
 def working_tree_dirty(repo_path: Path) -> bool:
@@ -190,8 +250,10 @@ async def run_task(
 ) -> RunResult:
     """on_log, if given, receives every log line as it happens (the desktop app
     streams it); the same lines are also returned in RunResult.log."""
-    branch = f"agent/issue-{task.id}"
+    branch = f"{TASK_BRANCH_PREFIX}{task.id}"
     repo_slug, base = repo_info(repo_path)
+    # Checked before the agent turn so a misconfiguration costs no model time.
+    assert_writable_branch(branch, base)
     log: list[str] = []
 
     def note(line: str) -> None:
@@ -225,6 +287,9 @@ async def run_task(
         note("Dry run - changes made but not committed:")
         note(diffstat.stdout)
         return RunResult(task=task, branch=branch, changed=True, pr_url=None, log=log)
+
+    # Re-checked after the turn: the guard above cannot see HEAD moving during it.
+    assert_head_is_task_branch(repo_path, branch)
 
     _run_git(repo_path, "add", "-A")
     _run_git(repo_path, "commit", "-m", f"Closes #{task.id}: {task.title}")
