@@ -1,178 +1,200 @@
 # Ticket2PR
 
-[![CI](https://github.com/Hamzah-Muhammad/Ticket2PR/actions/workflows/ci.yml/badge.svg)](https://github.com/Hamzah-Muhammad/Ticket2PR/actions/workflows/ci.yml) [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?logo=python&logoColor=white)](requirements.txt) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![CI](https://github.com/Hamzah-Muhammad/Ticket2PR/actions/workflows/ci.yml/badge.svg)](https://github.com/Hamzah-Muhammad/Ticket2PR/actions/workflows/ci.yml) [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg?logo=python&logoColor=white)](requirements.txt) [![Claude Agent SDK](https://img.shields.io/badge/Claude%20Agent%20SDK-0.2-D97757.svg)](https://docs.claude.com/en/api/agent-sdk/overview) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-An autonomous coding agent, built on the [Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/overview), that reads GitHub issues assigned to it and opens real pull requests to resolve them.
+**Hand it a GitHub issue. Get back a pull request.**
+
+Ticket2PR is an autonomous coding agent, built on Anthropic's [Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/overview), that picks up the issues you label for it, writes and tests the change in a real repository, and opens a pull request for a human to review. **It never merges anything itself.**
+
+It ships as a desktop app, so the person handing work to the agent doesn't need a terminal, a config file, or an API key. Point it at a repository, tick an issue, click a button, and review the PR it opens.
+
+![The Ticket2PR window mid-run: issue #2 selected in the queue, a progress bar reading "Working on #2", and the agent's live reasoning streaming into the log pane below - it has read the repo, checked the baseline tests, and started the fix](docs/desktop-app.png)
+
+*A real run against the [demo repository](https://github.com/Hamzah-Muhammad/ticket2pr-demo). The agent has read the codebase, run the existing tests to establish a baseline, and is writing the fix. Elapsed: 41 seconds.*
+
+---
+
+## See it work
+
+| 1. Hand it a task | 2. Click it | 3. Review the result |
+| --- | --- | --- |
+| Open a GitHub issue and add the `agent-ready` label. Plain English, the way you'd brief a junior engineer. | The issue appears in the app's queue. Select it and press **Create PR for selected**. | A pull request appears on GitHub with the code change, a test covering it, and a written summary of what it did. |
+| [Issue #2](https://github.com/Hamzah-Muhammad/ticket2pr-demo/issues/2) | ![the app after a run, showing the diffstat](docs/desktop-app-done.png) | [PR #12](https://github.com/Hamzah-Muhammad/ticket2pr-demo/pull/12) |
+
+The pull request that run produced, opened by the agent and left for review:
 
 ![A pull request opened by the agent on the demo repo: titled "divide() should raise a clear error on division by zero (closes #2)", pushed to a branch named agent/issue-2, changing two files - the fix in utils.py and a new pytest case covering it](docs/generated-pr.png)
 
-*[PR #12](https://github.com/Hamzah-Muhammad/ticket2pr-demo/pull/12) on the demo repo - opened by the agent, not by hand. It read issue #2, branched as `agent/issue-2`, wrote the guard clause in `utils.py`, **and added a test covering it**, then linked the issue so merging closes it.*
+It read the issue, branched as `agent/issue-2`, wrote the guard clause in `utils.py`, **added a test covering it**, and linked the issue so merging closes it. Three such PRs are open on the demo repo as a standing exhibit: [#10 (add a LICENSE)](https://github.com/Hamzah-Muhammad/ticket2pr-demo/pull/10), [#11 (off-by-one bug)](https://github.com/Hamzah-Muhammad/ticket2pr-demo/pull/11), [#12 (division by zero)](https://github.com/Hamzah-Muhammad/ticket2pr-demo/pull/12).
 
-Assign it an issue on a repo it's watching; it checks out a branch, lets Claude implement and test the fix inside a sandboxed working tree, and, if the change is real, commits, pushes, and opens a PR for a human to review. It never merges anything itself.
+Worth noticing in that run: the demo repo has a *second*, unrelated failing test seeded in it. The agent spotted it, decided it was out of scope for the issue it was given, left it alone, and said so in its summary. Scope discipline is a prompt-and-harness design problem, not a model accident, and it is the difference between an agent you can leave running and one you can't.
 
-**Stack:** a Python app that orchestrates two things it doesn't reimplement itself - GitHub (issues, branches, PRs, all via the `gh` CLI) and Claude (the actual coding, via Anthropic's Claude Agent SDK). Python's job is entirely the plumbing around those two: which issue to pick up, when to branch, when a change is real enough to commit, when to open the PR. Claude never touches git or GitHub directly; see [The safety boundary](#the-safety-boundary) for how that is enforced.
+---
 
-## What this project demonstrates
-
-This repo exists to show how I build agents and coding tools. A working agent is a model plus four things the harness gives it, and each one here is a deliberate, tested decision:
-
-| Pillar | What it means in Ticket2PR | Where |
-|---|---|---|
-| **Tools** | The agent gets exactly six of the SDK's built-in tools (`Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash`) and nothing else. Two `PreToolUse` hooks narrow them further: a Bash guardrail that denies every `git`/`gh` invocation plus `rm -rf`, `sudo`, and pipe-to-shell, and a path jail that denies any `Write`/`Edit` outside the target repo or inside `.git/`. The whole git lifecycle (branch, commit, push, PR) is deterministic Python, never a model-issued command. | `agent/guardrails.py`, `agent/runner.py` |
-| **System prompt** | One paragraph. It sets the job (smallest correct change), the scope (only relevant files), the verification rule (run the test suite), the one hard rule (never git/gh; the hooks enforce it anyway), and what the final message must be (a PR-ready summary). The issue title and body are the user prompt, verbatim: no template, no rewriting. | `SYSTEM_PROMPT` in `agent/runner.py` |
-| **Context window** | One fresh `query()` per issue, so no issue's context bleeds into the next. `max_turns=30` caps a stuck agent. The agent's text output is captured turn by turn and its closing summary becomes the PR description, so what it reasoned is not thrown away when the context ends. | `agent/runner.py` |
-| **Memory** | Deliberately none inside the model. State lives where humans can audit it: git (one `agent/issue-N` branch per issue, always recreated from a freshly pulled base) and GitHub (a label is the queue, a PR is the output). That makes every run idempotent: a dirty working tree is refused up front, an open PR is reused instead of duplicated, pushes are `--force-with-lease`. | `agent/runner.py`, `main.py`, `tasks/` |
-
-The interesting engineering is the boundary around the model, not the call to it. The rest of this README is the operator's view of that boundary.
-
-## Setup
-
-Four prerequisites, all checked at startup with the fix printed if one is missing:
-
-| You need | How to get it | How to verify |
-|---|---|---|
-| Python 3.11+ | [python.org](https://www.python.org/downloads/) | `python --version` |
-| GitHub CLI, logged in | [cli.github.com](https://cli.github.com/), then `gh auth login` | `gh auth status` |
-| Claude Code, logged in | [Claude Code](https://code.claude.com/docs/en/agent-sdk/overview), installed **natively** (`irm https://claude.ai/install.ps1 \| iex`); the SDK rides that login. An `ANTHROPIC_API_KEY` in `.env` works for API billing | `claude --version` |
-| A local clone of the repo to work on | `gh repo clone owner/repo`, with push access to `origin` | `git -C path/to/clone status` |
-
-Then:
+## What one run actually does
 
 ```
+An issue labelled agent-ready
+        |
+        v
+1. git checkout main && git pull --ff-only && git checkout -B agent/issue-N
+        |                                     (always a fresh branch off a fresh base)
+        v
+2. One Claude Agent SDK turn, working directory locked to your repo
+     - it can Read / Write / Edit files, search them, and run Bash (tests, linters)
+     - it cannot run git or gh at all: a hook denies those before they execute
+        |
+        v
+3. Did the working tree actually change?  ---- no ---> stop, report, touch nothing
+        |
+       yes
+        v
+4. Refuse unless HEAD is still on agent/issue-N   ---- drifted ---> stop, commit nothing
+        |
+        v
+5. commit -> push the branch -> gh pr create
+        |
+        v
+   A pull request. A human reviews and merges it. The agent never does.
+```
+
+Steps 1, 3, 4 and 5 are plain deterministic Python. Only step 2 is the model. That split is the whole design: models are good at fuzzy judgment (what code to write), ordinary code is better at repeatable, auditable steps (the git lifecycle), and when something goes wrong you want the git part to be readable rather than inferred.
+
+---
+
+## Run it yourself
+
+### The desktop app (no terminal needed)
+
+Take [`Ticket2PR.exe`](Ticket2PR.exe) from the repo root (`git clone`, or *Code -> Download ZIP* on GitHub) and double-click it. One-time setup, three things:
+
+| You need | How to get it | The app tells you if it's missing |
+| --- | --- | --- |
+| **GitHub CLI** | Install from [cli.github.com](https://cli.github.com/) | The status light turns red with an install link |
+| **A GitHub connection** | Click **Connect**: the app shows a one-time code, copies it to your clipboard and opens GitHub in your browser. Approve, and you're in. A personal access token works too. | It opens the Connect dialog by itself on first launch |
+| **Claude Code, signed in** | Install it natively: `irm https://claude.ai/install.ps1 \| iex`, then run `claude` once and log in | The status light turns red with the exact command |
+
+No API key to paste anywhere and nothing stored by this app: GitHub access is the GitHub CLI's own login, and Claude access is your Claude Code login.
+
+Then: **Browse** to a local clone (or **Clone from GitHub**, which lists your repositories), check the queue of `agent-ready` issues, select one, and click **Create PR for selected**. *Dry run* is ticked by default, so the first run makes the changes and shows you the diff without pushing anything. Untick it to open real pull requests.
+
+Your last repository, label, assignee filter and dry-run setting are remembered in `%APPDATA%\Ticket2PR\settings.json`.
+
+### The command line
+
+```powershell
 git clone https://github.com/Hamzah-Muhammad/Ticket2PR.git
 cd Ticket2PR
 python -m venv venv
 venv\Scripts\python -m pip install -r requirements.txt
+
+gh auth login                      # GitHub access
+run.bat --dry-run                  # see what it would do
+run.bat --discard-changes          # do it for real: every agent-ready issue becomes a PR
 ```
-
-There is no GitHub token or API key to paste anywhere, on purpose: GitHub access is whatever `gh auth login` gave you, Claude access is whatever Claude Code has. To try it on the demo repo, clone it as a sibling folder (that is the default in `config.py`):
-
-```
-cd ..
-gh repo clone Hamzah-Muhammad/ticket2pr-demo
-cd Ticket2PR
-```
-
-## Desktop app (Ticket2PR.exe)
-
-![The Ticket2PR window: GitHub and Claude status at the top right, the local clone with its detected GitHub repo, the agent's queue of agent-ready issues on the demo repo, a dry-run checkbox and a Create PR button, and a log pane](docs/desktop-app.png)
-
-`Ticket2PR.exe` at the repo root (also on the Releases page) is the same agent with a window around it, for anyone who would rather not use a terminal:
-
-1. **Double-click.** It checks GitHub and Claude Code and shows both at the top right.
-2. **Connect to GitHub** if it isn't already: the dialog asks `gh` for a one-time code, copies it to your clipboard and opens `github.com/login/device`; approve there and the app notices. Pasting a token works too. Nothing is stored by the app: the login is `gh`'s own.
-3. **Pick the repo**: Browse to a local clone, or *Clone from GitHub* (it lists your repositories). The GitHub repo is read from the clone's `origin`.
-4. **Pick issues.** The queue lists open issues carrying the label (`agent-ready` by default; an optional assignee filter narrows it). Select one or more and click *Create PR for selected*, or double-click an issue. Dry run is on by default: untick it to push and open real PRs.
-5. **Watch the log.** The agent's work streams in; a finished PR appears as a link. A dirty working tree (from a previous dry run) is caught before the run starts, with a one-click reset.
-
-It needs `gh` (or connect from inside the app) and a **native** Claude Code install, logged in. The Agent SDK refuses the npm install's `claude.cmd` shim for injection-safety reasons, so if that is all it finds, the app says so and shows the install command. The exe deliberately does not bundle the 253 MB Claude CLI. Settings (last repo, label, assignee, dry run) persist in `%APPDATA%\Ticket2PR\settings.json`.
-
-Two headless modes exist to verify a build: `Ticket2PR.exe --smoke` prints what the window would show, and `Ticket2PR.exe --run-issue 2 --dry-run --target-repo C:\path\to\clone` runs one issue exactly as a click would.
-
-## Running it
-
-```
-# Recommended first run: see the diff, nothing pushed
-run.bat --dry-run
-
-# Run for real: every open "agent-ready" issue on the config.py repo becomes a PR
-run.bat --discard-changes
-
-# Everything below also works with venv\Scripts\python main.py instead of run.bat
-run.bat --target-repo C:\path\to\other\repo --dry-run
-run.bat --issue 3
-run.bat --label ready-for-agent
-```
-
-`run.bat` is a one-liner around `venv\Scripts\python main.py` that pauses at the end so a double-click stays readable. Prefer the window? See [Desktop app](#desktop-app-ticket2prexe).
 
 | Flag | Meaning |
-|---|---|
+| --- | --- |
 | `--dry-run` | Make the code changes but stop before commit/push/PR |
 | `--discard-changes` | Throw away uncommitted changes in the target repo first (what a dry run leaves behind) |
-| `--target-repo` | Path to a local clone with `origin` pointing at GitHub and push access (default: `config.py`) |
-| `--issue N` | Only process issue `N`, instead of every open labeled issue |
-| `--label` | Which issue label counts as the task queue (default: `config.py`) |
-| `--repo-slug` | Override the `owner/repo` used for `gh` calls (defaults to the target repo's `origin` remote) |
+| `--target-repo` | Path to a local clone with `origin` on GitHub and push access (default: `config.py`) |
+| `--issue N` | Only process issue `N` |
+| `--label` | Which label counts as the queue (default: `agent-ready`) |
+| `--repo-slug` | Override the `owner/repo` used for `gh` (defaults to the clone's `origin`) |
 
-A dry run leaves its changes uncommitted in the target repo so you can inspect them. The next run refuses to start on top of them; pass `--discard-changes` to reset, or commit/stash them yourself.
+Defaults for the target repo, label and model live in `config.py`. Every prerequisite is checked at startup, and each failure prints the command that fixes it.
 
-## Configuration
+---
 
-| Setting | Where it lives |
-|---|---|
-| Default target repo, label, model | **`config.py`**: `DEFAULT_TARGET_REPO`, `DEFAULT_LABEL`, `AGENT_MODEL` |
-| GitHub auth | `gh auth login` / `gh auth status`; nothing stored in this repo |
-| Claude auth | Your Claude Code login, automatically; or `ANTHROPIC_API_KEY` in `.env` (see `.env.example`, `.env` is gitignored) |
+## How it's built
 
-Every `config.py` default can be overridden per run with a flag.
+The agent's brain is one call into the Claude Agent SDK, in [`agent/runner.py`](agent/runner.py):
 
-## How it works
+```python
+options = ClaudeAgentOptions(
+    system_prompt=SYSTEM_PROMPT,          # the job, the scope, the one hard rule
+    cwd=str(repo_path),                   # the clone it works in
+    allowed_tools=["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+    hooks={"PreToolUse": [                # a veto over every tool call, before it runs
+        HookMatcher(matcher="Bash",       hooks=[bash_guardrail_hook]),
+        HookMatcher(matcher="Write|Edit", hooks=[make_path_jail_hook(repo_path)]),
+    ]},
+    max_turns=30,
+)
 
-```
-GitHub Issues assigned to the agent (agent-ready label)
-        |
-        v
-tasks/github_source.py  ->  reads issues via `gh issue list`
-        |
-        v
-agent/runner.py  ->  for each issue:
-   1. git checkout -B agent/issue-N  (fresh branch off a freshly pulled main)
-   2. one Claude Agent SDK turn, working directory locked to your repo
-      - can Read/Write/Edit files, run Bash (tests, linters, etc.)
-      - cannot run git or gh at all - blocked by a hook (agent/guardrails.py)
-   3. if real changes exist: commit -> push -> gh pr create
-      (or reuse the PR that is already open for that branch)
-        |
-        v
-   A real PR, for you to review and merge yourself
+async for message in query(prompt=f"Issue #{task.id}: {task.title}\n\n{task.body}", options=options):
+    ...   # stream the agent's text to the log; its closing summary becomes the PR body
 ```
 
-The agent never merges anything or touches `main` directly; every result is a PR sitting there for human review.
+The SDK runs the agent loop (call the model, execute a tool, feed the result back, repeat) in a Claude Code subprocess, using your existing Claude Code login. What this project supplies is everything around it: which task to pick up, what the agent is allowed to touch, when a change is real enough to commit, and what happens to the result.
 
-## Feeding it tasks
+**The interesting engineering is that boundary, not the model call.** Four decisions define it:
 
-Tasks are GitHub issues assigned to the agent. There is no bot account to hold a literal GitHub "Assignee", so a label (`agent-ready` by default) plays that role instead: it is how you hand the agent an issue and mark it ready to pick up. To give it work on any repo:
+| | In Ticket2PR | Where |
+| --- | --- | --- |
+| **Tools** | Six built-in tools and nothing else, narrowed further by two `PreToolUse` hooks: a Bash guardrail that denies every `git`/`gh` command plus `rm -rf`, `sudo` and pipe-to-shell, and a path jail that denies any write outside the repo or inside `.git/`. A denied call comes back to the model as a readable reason, so it can adapt instead of failing. | `agent/guardrails.py` |
+| **System prompt** | One paragraph: smallest correct change, only relevant files, run the tests related to your change, leave pre-existing failures alone and report them, never touch git, finish with a summary fit for a PR description. The issue title and body are the user prompt, verbatim. | `agent/runner.py` |
+| **Context** | One fresh turn per issue, so nothing bleeds between tasks. A 30-turn ceiling stops a stuck agent. Its output is streamed to the log as it happens and its closing summary is carried into the PR body, so the reasoning survives the end of the context window. | `agent/runner.py` |
+| **State** | Deliberately none inside the model. State lives where humans can audit it: git (one `agent/issue-N` branch per issue, always rebuilt from a freshly pulled base) and GitHub (a label is the queue, a PR is the output). That makes runs idempotent: a dirty tree is refused up front, an already-open PR is updated rather than duplicated. | `agent/runner.py`, `main.py` |
 
-1. Open an issue describing the change, as specifically as you'd write it for a junior engineer, e.g. "`divide()` should raise `ValueError` on division by zero, add a test for it."
-2. Assign it to the agent by adding the `agent-ready` label (`gh issue create --label agent-ready ...`, or add the label in the GitHub UI).
+The task source is pluggable: `tasks/base.py` defines a `TaskSource` protocol and `tasks/github_source.py` is the shipped implementation, so a Jira or Linear backlog would slot in without touching the orchestrator.
 
-That's it: no special format required, the issue title + body become the agent's prompt directly.
+---
 
 ## The safety boundary
 
-This is a demo of how to give an LLM agent real write access to a codebase *safely*. The interesting engineering isn't "call the model", it's the boundary around it:
+Giving a language model write access to a real codebase is the part that has to be got right. Three guarantees, each enforced by construction rather than by asking the model nicely:
 
-- **The agent never touches git or GitHub.** Its tool surface is `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash`, and a `PreToolUse` hook (`agent/guardrails.py`) blocks every `git` and `gh` invocation the model might attempt through Bash. Branch creation, commit, push, and PR creation are deterministic Python in `agent/runner.py`, not model output. Agents are good at fuzzy judgment (what code to write); plain code is better at repeatable, auditable steps (the git lifecycle).
-- **Write/Edit are path-jailed to the target repo.** `cwd` on `ClaudeAgentOptions` is only the working-directory *convention* the model reasons from; it does not restrict where `Write`/`Edit` can write. A second `PreToolUse` hook (`make_path_jail_hook` in `agent/guardrails.py`) resolves every `Write`/`Edit` target path and denies anything that lands outside the repo, or inside `.git/` directly (which would otherwise be a clean bypass of the git guardrail above). This isn't hypothetical; see the Demo section below.
-- **Every change lands as a PR, never a commit to `main`.** A human reviews before anything merges. This is structural rather than a policy the model is asked to respect: the harness contains no merge code at all (no `git merge`, no `gh pr merge`), the branch name is built from GitHub's own integer issue number so nothing in an issue's text can steer it, and two assertions in `agent/runner.py` refuse the run outright if the target branch is the default/protected branch, or if `HEAD` is not still on the task branch when it is time to commit. That second one is not hypothetical: Claude Code's checkpointing has been seen to move `HEAD` mid-turn, and without the check `git add -A && git commit` would land the agent's work on local `main`.
-- **Every run starts clean.** A dirty working tree is refused at startup (`--discard-changes` to reset), each branch is recreated from a freshly pulled base, and an already-open PR is reused rather than duplicated.
-- **The task source is pluggable.** `tasks/base.py` defines a `TaskSource` protocol; `tasks/github_source.py` is the one shipped implementation. The same interface could back a `JiraSource` or `LinearSource` without touching the orchestrator.
-- **Turns are capped** (`max_turns=30`) and **dry-run is the recommended first run**.
+**1. The agent cannot use git or GitHub.** Its entire tool surface is read, write, edit, search and shell, and a `PreToolUse` hook denies every `git` and `gh` invocation before it executes. Branching, committing, pushing and opening the PR are done by the harness.
+
+**2. The agent cannot write outside the repository.** `cwd` on the SDK options is only the working directory the model reasons from; it does not restrict where a write can land. A second hook resolves every `Write`/`Edit` path and denies anything outside the clone, or inside `.git/`. This is not hypothetical, see the next section.
+
+**3. Nothing ever lands on `main`.** The harness contains no merge code at all: no `git merge`, no `gh pr merge`. The branch name is built from GitHub's own integer issue number, so nothing in an issue's text can steer it. And two assertions in `agent/runner.py` refuse the run outright if the target is the default or a protected branch, or if `HEAD` is no longer on the task branch when it is time to commit.
+
+Every result is a pull request. A human decides what merges.
+
+---
+
+## What the live runs caught
+
+The interesting failures in agent tooling are rarely the model. They are the harness's assumptions about state. Each of these was found by running the thing for real, and each one is now a test:
+
+1. **Stacked diffs.** The first live pass produced PRs containing each other's changes, because each branch was created from wherever `HEAD` happened to be after the previous task. Now every branch is rebuilt from a freshly pulled base.
+2. **A commit pushed to the wrong ref.** Claude Code's own session checkpointing moved `HEAD` mid-turn; pushing by local branch name silently stranded the commit instead of erroring. Now it pushes `HEAD:<branch>` explicitly.
+3. **A write outside the repository.** Re-running the LICENSE issue reproduced exactly what the path jail exists for: the agent's first attempt wrote the file to the repo's *parent* directory. The hook denied it, the agent read the denial and corrected itself in the same turn, and the file landed in the right place.
+4. **Work committed onto local `main`.** Following on from #2: if `HEAD` drifted back to `main`, `git add -A && git commit` put the agent's commit on `main` before the push ever happened. Reproduced against real git with the new assertion disabled, main's tip became `Closes #7: Fix`. Now the run refuses and leaves the changes in the working tree.
+5. **A documented workflow that could not run twice.** A dry run leaves changes uncommitted, so the next run's `git checkout main` inherited them. Now a dirty tree is refused at startup, with a one-click reset in the app and `--discard-changes` on the CLI.
+
+---
 
 ## Known limitations
 
-Being upfront about what this does *not* protect against:
+Being straight about what this does *not* protect against:
 
-- **The Bash guardrail is a text blocklist, not real sandboxing.** It pattern-matches the command string for `git`, `gh`, and a few other dangerous patterns. A differently-phrased command that reaches equivalent behavior without those literal words (e.g. a Python git library) would not be caught by it. The Claude Agent SDK does support real OS-level command sandboxing (`ClaudeAgentOptions.sandbox`), but it's explicitly macOS/Linux-only, not available on the Windows machine this was built and demoed on.
-- **Issue bodies are untrusted input fed straight into the prompt**, and nothing here restricts the agent's outbound network access (only piping-into-shell is blocked, not general `curl`/`wget`/etc. calls). On a repo where the public can open issues, a malicious issue body is a real prompt-injection surface. This project assumes trusted issue authors; don't point it at a repo where anyone can file issues without review.
-- Both guardrails **fail closed** (deny on anything unexpected) but are still two specific hooks, not a formal proof of containment. Treat them as raising the bar, not as a guarantee.
+- **The Bash guardrail is a text blocklist, not a sandbox.** It pattern-matches for `git`, `gh` and a few dangerous shapes. A command that reaches equivalent behaviour without those literal words (a Python git library, say) would not be caught. The SDK does offer real OS-level sandboxing, but it is macOS/Linux only and this was built for Windows.
+- **Issue bodies are untrusted text fed straight into a prompt**, and outbound network access is not restricted. On a repository where the public can file issues, that is a real prompt-injection surface. Point it at repositories whose issues you trust.
+- **Both hooks fail closed, but they are two specific hooks, not a proof of containment.** Treat them as raising the bar.
+- **Small, well-specified issues are its sweet spot.** A vague issue produces a vague PR, or none at all, which is why every result stops at review.
+- **Windows first.** The library code is cross-platform and CI runs on Ubuntu too, but the packaged app and the `run.bat` entry point are Windows.
+
+---
 
 ## Troubleshooting
 
-Every message below is printed by Ticket2PR itself; this table is the same information in one place.
+Every message below is printed by Ticket2PR itself.
 
-| Message | Cause | Fix |
-|---|---|---|
-| `GitHub CLI (gh) is not installed or not on PATH` | `gh` missing | Install from [cli.github.com](https://cli.github.com/), reopen the terminal |
-| `GitHub CLI is installed but not logged in` | no `gh` session | `gh auth login` |
-| `... is not a git repo` | `--target-repo` / `config.py` points at nothing | Clone the target repo there, or pass `--target-repo` |
-| `... has uncommitted changes` | a previous `--dry-run` | `--discard-changes`, or commit/stash them yourself |
-| `Could not identify the GitHub repo behind ...` | `origin` isn't a GitHub remote | Pass `--repo-slug owner/repo` |
-| `Claude Code CLI not found` | Claude Code isn't installed / on PATH | Install Claude Code and log in, or set `ANTHROPIC_API_KEY` in `.env` |
-| `No changes produced - skipping commit/PR` | the agent decided nothing needed doing | Make the issue more specific, then re-run with `--issue N` |
-| `PR already open for agent/issue-N, updated by the push` | you re-ran an issue whose PR is still open | Nothing: the existing PR now has the new commit |
-| `FAILED: \`git -C ...\` exited 1: ...` | a git/gh step failed; the message carries its stderr | Read the stderr; the other issues in the batch still run |
+| Message | Fix |
+| --- | --- |
+| `GitHub CLI (gh) is not installed or not on PATH` | Install from [cli.github.com](https://cli.github.com/), reopen the terminal |
+| `GitHub CLI is installed but not logged in` | `gh auth login`, or click **Connect** in the app |
+| `Claude Code is installed via npm (claude.cmd), which the Agent SDK refuses` | Install natively: `irm https://claude.ai/install.ps1 \| iex` (cmd.exe shims can be argument-injected, so the SDK declines them) |
+| `... is not a git repo` | Point `--target-repo` (or **Browse**) at a real clone |
+| `... has uncommitted changes` | `--discard-changes`, or accept the reset the app offers |
+| `Refusing to commit: HEAD is on 'main'` | Something moved `HEAD` during the turn. Nothing was committed; the changes are still in the working tree |
+| `No changes produced - skipping commit/PR` | The agent judged nothing needed doing. Make the issue more specific |
+| `PR already open for agent/issue-N` | Expected on a re-run; the existing PR was updated by the push |
+
+---
 
 ## Architecture
 
@@ -180,71 +202,56 @@ Every message below is printed by Ticket2PR itself; this table is the same infor
 flowchart LR
     A[TaskSource<br/>GitHubIssuesSource] -->|Task list| B[Orchestrator<br/>agent/runner.py]
     B -->|git checkout -B agent/issue-N| C[(sandboxed<br/>target repo)]
-    B -->|one query() turn,<br/>cwd-scoped, Bash guardrail hook| D[Claude Agent SDK]
+    B -->|one query* turn,<br/>cwd-scoped, PreToolUse hooks| D[Claude Agent SDK]
     D -->|Read / Write / Edit / Bash| C
-    B -->|git diff check| C
+    B -->|is the tree really dirty?| C
     B -->|commit + push| E[GitHub branch]
     B -->|gh pr create| F[Pull Request]
+    G[gui/app.py<br/>desktop window] --> B
+    H[main.py<br/>CLI] --> B
 ```
-
-## Demo
-
-Run live against [`ticket2pr-demo`](https://github.com/Hamzah-Muhammad/ticket2pr-demo), a small seeded repo: three `agent-ready` issues, three real PRs, agent-authored end to end:
-
-- [PR #10 - Add a LICENSE file](https://github.com/Hamzah-Muhammad/ticket2pr-demo/pull/10)
-- [PR #11 - `first_n()` returns one fewer item than requested](https://github.com/Hamzah-Muhammad/ticket2pr-demo/pull/11)
-- [PR #12 - `divide()` should raise a clear error on division by zero](https://github.com/Hamzah-Muhammad/ticket2pr-demo/pull/12)
-
-Each diff touches only what its issue asked for. Notably, PR #12's agent turn noticed the *unrelated* pre-existing `test_first_n` failure (issue #11's bug, not yet merged) and correctly left it alone rather than fixing something out of scope.
-
-**Three real bugs the live runs surfaced**, left in on purpose, since the interesting failure mode in agent tooling usually isn't the model, it's the surrounding automation's assumptions about state:
-
-1. The first live pass produced PRs with diffs stacked on top of each other (issue B's PR contained issue A's changes too), because `agent/runner.py` created each new branch from whatever `HEAD` happened to be after the previous task, instead of from a freshly-updated `main`. Fixed by always rebasing each new branch from a freshly-pulled `main`.
-2. Once that was fixed, mid-turn `HEAD` was observed drifting off the branch the harness checked out (onto an auxiliary branch during a Claude Code session): pushing by local branch name silently stranded the commit on the wrong ref instead of erroring. Fixed by pushing `git push origin HEAD:<branch>` explicitly rather than trusting whatever branch is locally checked out.
-3. During the audit that added the Write/Edit path-jail hook (see [The safety boundary](#the-safety-boundary)), re-running the LICENSE issue live reproduced the exact bug that hook is designed to catch: the agent's first attempt wrote the file to the parent of the repo directory instead of inside it. The path-jail hook denied that write, the agent read the denial and self-corrected to the right path in the same turn, and the file ended up in the right place, confirmed by checking both locations on disk afterward.
-
-A fourth, found in the display-readiness audit: the documented "dry run first, then run for real" flow could not actually work twice in a row, because the dry run's uncommitted changes were still in the working tree when the next run did `git checkout main`. Now refused at startup with `--discard-changes` as the fix, and covered by `tests/test_main.py`.
-
-## Rebuilding Ticket2PR.exe
-
-```
-venv\Scripts\python -m pip install -r requirements-dev.txt
-venv\Scripts\python -m PyInstaller Ticket2PR.spec --noconfirm
-```
-
-Onefile console build (`dist/Ticket2PR.exe`) with the icon and version resource embedded. It is a console app that hides its own console once the window is up: the Agent SDK, git and gh are child processes, and children of a hidden console stay hidden, whereas a "windowed" build would flash a console for each. The root-level `Ticket2PR.exe` is rebuilt and re-committed whenever app code changes.
 
 ## Project layout
 
 ```
-config.py                 Edit this: default target repo, label, model
+config.py                  Edit this: default target repo, label, model
+main.py                    CLI entrypoint: startup checks, per-task failure isolation
 run.bat                    Double-click to run the CLI with config.py defaults
-main.py                    CLI entrypoint: startup checks (gh, target repo), per-task failure isolation
-ticket2pr_gui.py           Desktop entrypoint (what Ticket2PR.exe runs) + headless --smoke / --run-issue
-gui/engine.py              Everything the window does minus the widgets: gh login flows, repos, CLI lookup
-gui/app.py                 The tkinter window, connect and clone dialogs
-Ticket2PR.spec, .ico       PyInstaller build; Ticket2PR.exe is the prebuilt binary
+ticket2pr_gui.py           Desktop entrypoint (what Ticket2PR.exe runs), plus
+                           headless --smoke / --run-issue modes for verifying a build
+gui/engine.py              Everything the window does minus the widgets: GitHub login
+                           flows, repo listing/cloning, Claude CLI lookup, settings
+gui/app.py                 The tkinter window, Connect and Clone dialogs
+agent/runner.py            Per-task orchestration: branch -> agent turn -> commit/push/PR,
+                           and the assertions that keep it off main
+agent/guardrails.py        Bash blocklist + Write/Edit path jail, both as PreToolUse hooks
 tasks/base.py              Task dataclass + TaskSource protocol
-tasks/github_source.py     GitHubIssuesSource (gh CLI backed)
-agent/guardrails.py        Bash allow/block logic + Write/Edit path-jail, both as PreToolUse hooks
-agent/runner.py            Per-task orchestration: branch -> agent turn -> commit/push/PR (or reuse)
-tests/                     pytest: guardrails, path-jail, task-source parsing, the run_task
-                           harness (dry-run / no-change / push+PR / PR reuse), startup checks,
-                           the desktop engine (login parsing, settings, CLI lookup, streaming)
-pyproject.toml             ruff + black + pytest configuration
-requirements.txt           Runtime deps; requirements-dev.txt adds pytest, ruff, black
+tasks/github_source.py     GitHubIssuesSource, backed by the gh CLI
+tests/                     67 tests: guardrails, path jail, task parsing, the run_task
+                           harness, push safety against real git, startup checks, the
+                           desktop engine
+Ticket2PR.spec, .ico       PyInstaller build; Ticket2PR.exe is the prebuilt binary
 ```
 
 ## Testing
 
-```
+```powershell
 venv\Scripts\python -m pip install -r requirements-dev.txt
-venv\Scripts\python -m pytest
+venv\Scripts\python -m pytest        # 67 tests
 venv\Scripts\python -m ruff check .
 venv\Scripts\python -m black --check .
 ```
 
-The same three run on every push via [GitHub Actions](.github/workflows/ci.yml), on Windows and Ubuntu, Python 3.11 and 3.13.
+All three run on every push via [GitHub Actions](.github/workflows/ci.yml), on Windows and Ubuntu, Python 3.11 and 3.13. The git and push-safety tests drive real local repositories with a real bare `origin` rather than mocks, so the guarantees above are checked against git's actual behaviour, with no network and no model in the loop.
+
+## Rebuilding the app
+
+```powershell
+venv\Scripts\python -m pip install -r requirements-dev.txt
+venv\Scripts\python -m PyInstaller Ticket2PR.spec --noconfirm
+```
+
+Onefile build at `dist/Ticket2PR.exe`, with the icon and version resource embedded. It is a console executable that hides its own console once the window opens: the SDK, git and gh all run as child processes, and children of a hidden console stay hidden, where a windowed build would flash a console for each. The root-level `Ticket2PR.exe` is rebuilt and re-committed whenever app code changes.
 
 ## License
 
