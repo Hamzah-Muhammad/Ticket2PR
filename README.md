@@ -16,6 +16,10 @@ It ships as a desktop app, so the person handing work to the agent doesn't need 
 
 ## See it work
 
+![Ticket2PR running: issue #2 is selected in the queue, Create PR for selected is clicked, a progress bar appears, and the agent's reasoning streams into the log until it reports the files it changed](docs/demo.gif)
+
+*One real run, start to finish: pick the issue, press the button, watch the agent read the repo, check the tests and write the fix. It took 42 seconds; this plays back at about double speed. Dry run is on here, so it stops just before pushing - the pull request it produces when you untick that is [PR #12](https://github.com/Hamzah-Muhammad/ticket2pr-demo/pull/12), below.*
+
 | 1. Hand it a task | 2. Click it | 3. Review the result |
 | --- | --- | --- |
 | Open a GitHub issue and add the `agent-ready` label. Plain English, the way you'd brief a junior engineer. | The issue appears in the app's queue. Select it and press **Create PR for selected**. | A pull request appears on GitHub with the code change, a test covering it, and a written summary of what it did. |
@@ -66,7 +70,7 @@ Steps 1, 3, 4 and 5 are plain deterministic Python. Only step 2 is the model. Th
 
 ### The desktop app (no terminal needed)
 
-Take [`Ticket2PR.exe`](Ticket2PR.exe) from the repo root (`git clone`, or *Code -> Download ZIP* on GitHub) and double-click it. One-time setup, three things:
+Download `Ticket2PR.exe` from the [latest release](https://github.com/Hamzah-Muhammad/Ticket2PR/releases/latest) (it is also committed at the repo root) and double-click it. One-time setup, three things:
 
 | You need | How to get it | The app tells you if it's missing |
 | --- | --- | --- |
