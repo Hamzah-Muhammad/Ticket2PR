@@ -23,3 +23,7 @@ DEFAULT_TARGET_REPO = Path(__file__).resolve().parent.parent / "ticket2pr-demo"
 
 # Which issue label marks a task as ready for the agent to pick up.
 DEFAULT_LABEL = "agent-ready"
+
+# Which Claude model the agent turn runs on. None = whatever your Claude Code
+# login uses by default; set e.g. "claude-opus-5" to pin one.
+AGENT_MODEL: str | None = None

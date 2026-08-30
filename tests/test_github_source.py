@@ -10,10 +10,22 @@ def _fake_run(stdout: str):
 
 
 def test_list_ready_tasks_parses_gh_json() -> None:
-    payload = json.dumps([
-        {"number": 3, "title": "Add input validation", "body": "validate x > 0", "url": "https://github.com/o/r/issues/3"},
-        {"number": 5, "title": "Add .gitignore", "body": None, "url": "https://github.com/o/r/issues/5"},
-    ])
+    payload = json.dumps(
+        [
+            {
+                "number": 3,
+                "title": "Add input validation",
+                "body": "validate x > 0",
+                "url": "https://github.com/o/r/issues/3",
+            },
+            {
+                "number": 5,
+                "title": "Add .gitignore",
+                "body": None,
+                "url": "https://github.com/o/r/issues/5",
+            },
+        ]
+    )
     source = GitHubIssuesSource(repo="o/r", label="agent-ready")
 
     with patch("subprocess.run", return_value=_fake_run(payload)) as mock_run:
@@ -28,7 +40,14 @@ def test_list_ready_tasks_parses_gh_json() -> None:
 
 
 def test_get_task_parses_single_issue() -> None:
-    payload = json.dumps({"number": 7, "title": "Fix bug", "body": "details", "url": "https://github.com/o/r/issues/7"})
+    payload = json.dumps(
+        {
+            "number": 7,
+            "title": "Fix bug",
+            "body": "details",
+            "url": "https://github.com/o/r/issues/7",
+        }
+    )
     source = GitHubIssuesSource(repo="o/r")
 
     with patch("subprocess.run", return_value=_fake_run(payload)):
