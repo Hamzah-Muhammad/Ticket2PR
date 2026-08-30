@@ -33,7 +33,7 @@ Four prerequisites, all checked at startup with the fix printed if one is missin
 |---|---|---|
 | Python 3.11+ | [python.org](https://www.python.org/downloads/) | `python --version` |
 | GitHub CLI, logged in | [cli.github.com](https://cli.github.com/), then `gh auth login` | `gh auth status` |
-| Claude Code, logged in | [Claude Code](https://code.claude.com/docs/en/agent-sdk/overview) (the SDK rides that login); or an `ANTHROPIC_API_KEY` in `.env` for API billing | `claude --version` |
+| Claude Code, logged in | [Claude Code](https://code.claude.com/docs/en/agent-sdk/overview), installed **natively** (`irm https://claude.ai/install.ps1 \| iex`); the SDK rides that login. An `ANTHROPIC_API_KEY` in `.env` works for API billing | `claude --version` |
 | A local clone of the repo to work on | `gh repo clone owner/repo`, with push access to `origin` | `git -C path/to/clone status` |
 
 Then:
@@ -53,6 +53,22 @@ gh repo clone Hamzah-Muhammad/ticket2pr-demo
 cd Ticket2PR
 ```
 
+## Desktop app (Ticket2PR.exe)
+
+![The Ticket2PR window: GitHub and Claude status at the top right, the local clone with its detected GitHub repo, the agent's queue of agent-ready issues on the demo repo, a dry-run checkbox and a Create PR button, and a log pane](docs/desktop-app.png)
+
+`Ticket2PR.exe` at the repo root (also on the Releases page) is the same agent with a window around it, for anyone who would rather not use a terminal:
+
+1. **Double-click.** It checks GitHub and Claude Code and shows both at the top right.
+2. **Connect to GitHub** if it isn't already: the dialog asks `gh` for a one-time code, copies it to your clipboard and opens `github.com/login/device`; approve there and the app notices. Pasting a token works too. Nothing is stored by the app: the login is `gh`'s own.
+3. **Pick the repo**: Browse to a local clone, or *Clone from GitHub* (it lists your repositories). The GitHub repo is read from the clone's `origin`.
+4. **Pick issues.** The queue lists open issues carrying the label (`agent-ready` by default; an optional assignee filter narrows it). Select one or more and click *Create PR for selected*, or double-click an issue. Dry run is on by default: untick it to push and open real PRs.
+5. **Watch the log.** The agent's work streams in; a finished PR appears as a link. A dirty working tree (from a previous dry run) is caught before the run starts, with a one-click reset.
+
+It needs `gh` (or connect from inside the app) and a **native** Claude Code install, logged in. The Agent SDK refuses the npm install's `claude.cmd` shim for injection-safety reasons, so if that is all it finds, the app says so and shows the install command. The exe deliberately does not bundle the 253 MB Claude CLI. Settings (last repo, label, assignee, dry run) persist in `%APPDATA%\Ticket2PR\settings.json`.
+
+Two headless modes exist to verify a build: `Ticket2PR.exe --smoke` prints what the window would show, and `Ticket2PR.exe --run-issue 2 --dry-run --target-repo C:\path\to\clone` runs one issue exactly as a click would.
+
 ## Running it
 
 ```
@@ -68,7 +84,7 @@ run.bat --issue 3
 run.bat --label ready-for-agent
 ```
 
-`run.bat` is a one-liner around `venv\Scripts\python main.py` that pauses at the end so a double-click stays readable.
+`run.bat` is a one-liner around `venv\Scripts\python main.py` that pauses at the end so a double-click stays readable. Prefer the window? See [Desktop app](#desktop-app-ticket2prexe).
 
 | Flag | Meaning |
 |---|---|
@@ -189,18 +205,32 @@ Each diff touches only what its issue asked for. Notably, PR #12's agent turn no
 
 A fourth, found in the display-readiness audit: the documented "dry run first, then run for real" flow could not actually work twice in a row, because the dry run's uncommitted changes were still in the working tree when the next run did `git checkout main`. Now refused at startup with `--discard-changes` as the fix, and covered by `tests/test_main.py`.
 
+## Rebuilding Ticket2PR.exe
+
+```
+venv\Scripts\python -m pip install -r requirements-dev.txt
+venv\Scripts\python -m PyInstaller Ticket2PR.spec --noconfirm
+```
+
+Onefile console build (`dist/Ticket2PR.exe`) with the icon and version resource embedded. It is a console app that hides its own console once the window is up: the Agent SDK, git and gh are child processes, and children of a hidden console stay hidden, whereas a "windowed" build would flash a console for each. The root-level `Ticket2PR.exe` is rebuilt and re-committed whenever app code changes.
+
 ## Project layout
 
 ```
 config.py                 Edit this: default target repo, label, model
-run.bat                    Double-click to run with config.py defaults
+run.bat                    Double-click to run the CLI with config.py defaults
 main.py                    CLI entrypoint: startup checks (gh, target repo), per-task failure isolation
+ticket2pr_gui.py           Desktop entrypoint (what Ticket2PR.exe runs) + headless --smoke / --run-issue
+gui/engine.py              Everything the window does minus the widgets: gh login flows, repos, CLI lookup
+gui/app.py                 The tkinter window, connect and clone dialogs
+Ticket2PR.spec, .ico       PyInstaller build; Ticket2PR.exe is the prebuilt binary
 tasks/base.py              Task dataclass + TaskSource protocol
 tasks/github_source.py     GitHubIssuesSource (gh CLI backed)
 agent/guardrails.py        Bash allow/block logic + Write/Edit path-jail, both as PreToolUse hooks
 agent/runner.py            Per-task orchestration: branch -> agent turn -> commit/push/PR (or reuse)
 tests/                     pytest: guardrails, path-jail, task-source parsing, the run_task
-                           harness (dry-run / no-change / push+PR / PR reuse), startup checks
+                           harness (dry-run / no-change / push+PR / PR reuse), startup checks,
+                           the desktop engine (login parsing, settings, CLI lookup, streaming)
 pyproject.toml             ruff + black + pytest configuration
 requirements.txt           Runtime deps; requirements-dev.txt adds pytest, ruff, black
 ```
