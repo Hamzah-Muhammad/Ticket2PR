@@ -120,6 +120,8 @@ def test_run_task_streams_lines_through_on_log() -> None:
 
     def fake_git(repo_path: Path, *args: str) -> subprocess.CompletedProcess:
         out = " M a.py\n" if args[:2] == ("status", "--porcelain") else ""
+        if args[:1] == ("rev-parse",):
+            out = "agent/issue-1"
         return _completed(out)
 
     async def fake_turn(repo_path, task, on_log=None, **_kwargs):
