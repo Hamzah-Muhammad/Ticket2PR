@@ -2,18 +2,18 @@
 
 Two independent guardrails, both wired as PreToolUse hooks (see
 claude_agent_sdk hooks) because PreToolUse fires for every matching tool call
-regardless of allowed_tools — unlike can_use_tool, which is skipped for tools
+regardless of allowed_tools - unlike can_use_tool, which is skipped for tools
 already auto-allowed:
 
-1. `blocked_reason()` / `bash_guardrail_hook()` — blocks git/gh and other
+1. `blocked_reason()` / `bash_guardrail_hook()` - blocks git/gh and other
    dangerous shell commands. This is a text blocklist, not real sandboxing:
    see the README's "Known limitations" section for what that does and
    doesn't cover.
-2. `path_jail_reason()` / `make_path_jail_hook()` — blocks Write/Edit from
+2. `path_jail_reason()` / `make_path_jail_hook()` - blocks Write/Edit from
    touching anything outside the target repo, and specifically blocks direct
    writes under `.git/`. This exists because `cwd` on ClaudeAgentOptions is
    only the working-directory *convention* the model reasons from, not a
-   filesystem jail — nothing else stops an absolute or `..`-traversal path
+   filesystem jail - nothing else stops an absolute or `..`-traversal path
    from resolving outside the repo, and a direct write to `.git/refs/...`
    would be a clean bypass of guardrail #1 (it never touches the `git`
    binary at all).
@@ -31,7 +31,7 @@ from claude_agent_sdk import HookContext, HookInput, HookJSONOutput
 # Notably: ALL git commands are blocked. The agent's job is only to write and
 # test code; branch creation, commit, push, and PR creation are done by
 # deterministic harness code in runner.py, never by model-issued shell
-# commands. This is the load-bearing safety property of the whole project —
+# commands. This is the load-bearing safety property of the whole project -
 # an errant or manipulated agent turn cannot push/merge/force anything, because
 # it has no path to `git` at all.
 _BLOCKED_PATTERNS: list[tuple[str, str]] = [

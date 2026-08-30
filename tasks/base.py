@@ -17,13 +17,11 @@ class Task:
 class TaskSource(Protocol):
     """Anything that can list ready-to-work tasks implements this.
 
-    Swap in a JiraSource, LinearSource, etc. without touching the orchestrator —
+    Swap in a JiraSource, LinearSource, etc. without touching the orchestrator -
     the demo ships GitHubIssuesSource because it needs zero extra credentials
     beyond the `gh` CLI auth most developers already have.
     """
 
-    def list_ready_tasks(self) -> list[Task]:
-        ...
+    def list_ready_tasks(self) -> list[Task]: ...
 
-    def get_task(self, task_id: str) -> Task:
-        ...
+    def get_task(self, task_id: str) -> Task: ...
