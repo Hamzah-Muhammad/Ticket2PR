@@ -145,6 +145,54 @@ The task source is pluggable: `tasks/base.py` defines a `TaskSource` protocol an
 
 ---
 
+## How this agent was made
+
+"Agent" gets used loosely. Here it means one specific thing: a program where the model decides what to do next, the program carries it out, and the two keep going in a loop until the job is done. A chatbot answers once. A tool library waits to be called. An agent is the loop that connects a model to tools. Every agent, whichever framework it uses, is the same five parts, and this is where each of them lives in Ticket2PR:
+
+| Part | What it is here | Supplied by |
+| --- | --- | --- |
+| **Model** | Not in this repo at all. `config.AGENT_MODEL = None` means "whatever your Claude Code login defaults to"; set it to a model id like `claude-opus-5` to pin one. The SDK starts Claude Code as a subprocess and that process makes the HTTPS calls to `api.anthropic.com`. | Anthropic, at run time |
+| **System prompt** | `SYSTEM_PROMPT` in `agent/runner.py`. One paragraph: the job, the scope, the one hard rule. The issue title and body are the user message, verbatim. | This repo |
+| **Tools** | `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Bash`. All six are the SDK's built-ins; this repo implements none of them. It chooses them (`allowed_tools`) and then vetoes individual calls with two `PreToolUse` hooks in `agent/guardrails.py`. | Anthropic; narrowed by this repo |
+| **The loop** | `query(prompt, options)`. The SDK sends the prompt and the tool list to the model, runs whatever tool the model asks for, feeds the result back, and repeats until the model stops asking (or `max_turns=30`). This repo only reads the stream of messages that comes out. | Anthropic |
+| **State** | Deliberately none inside the model. One fresh context per issue. Everything that needs to persist lives in git (the `agent/issue-N` branch) and on GitHub (the label is the queue, the PR is the result). | This repo, by design |
+
+So the SDK supplies the model access, the tools and the loop. This repo supplies the prompt, the vetoes, and everything around the loop: which task to pick up, the git lifecycle before and after the turn, the assertions that keep it off `main`, the CLI, the desktop app, and the tests. The `agent/` folder is 450 lines. The rest of the project is the harness.
+
+### What one turn actually sends
+
+Nothing here reads the source code of this project. On every step of the loop, the SDK sends the model a request that boils down to:
+
+```
+system:   the SYSTEM_PROMPT paragraph
+tools:    six JSON descriptions (name, what it does, what arguments it takes)
+messages: "Issue #2: divide() should raise a clear error..."
+          <the model's earlier tool calls and their results, in order>
+```
+
+The model replies with either text or a tool call such as `{"name": "Read", "input": {"file_path": "utils.py"}}`. Claude Code runs the tool, appends the output to `messages`, and sends the whole thing again. The model itself never executes anything and remembers nothing between requests; the growing `messages` list is its only memory. A `PreToolUse` hook sits between "the model asked" and "the tool ran": when it denies a call, the denial text is what goes back into `messages`, which is why the agent can read it and correct itself in the same turn (see "What the live runs caught", item 3).
+
+### What is in the download and what is not
+
+| In the repo / the exe | Not included, brought by the user |
+| --- | --- |
+| The system prompt, the guardrails, the git lifecycle, the task source, the GUI, the tests | The model (runs on Anthropic's servers) |
+| The `claude-agent-sdk` Python package (the client half of the SDK) | Claude Code itself (the SDK's runtime; ~250 MB, installed natively and signed in) |
+| A model *name* in `config.py` | The credentials: the user's Claude Code login or their own `ANTHROPIC_API_KEY`, and their `gh auth login` |
+
+That is what "sending someone an agent" means in practice: you ship the code and a model name. The model, the runtime that talks to it, and the keys are always on the recipient's side.
+
+### The order it was built in
+
+1. **The smallest thing that works.** A `TaskSource` that lists `agent-ready` issues with `gh`, one `query()` call per issue with the six tools and a Bash hook that already denied `git` and `gh`, then `git commit`, `git push`, `gh pr create` in plain Python. Three real PRs on the demo repo on day one.
+2. **Fix what the live runs broke.** Stacked diffs (branch from a fresh base), a commit stranded on the wrong ref (push `HEAD:<branch>`), a file written to the repo's parent directory (the path jail hook), a commit landing on local `main` when HEAD drifted mid-turn (the `assert_head_is_task_branch` refusal). Each one is a test now.
+3. **Make it runnable twice.** Startup checks with the fix printed for each failure, `--discard-changes` for what a dry run leaves behind, re-runs update the open PR instead of failing.
+4. **Wrap it for people without a terminal.** `gui/engine.py` holds the logic, `gui/app.py` the tkinter window, PyInstaller produces `Ticket2PR.exe`. The app checks for `gh` and a native Claude Code and says exactly what to install if either is missing.
+
+The `query()` call has barely changed since the first commit: it gained the path jail hook and a model override. Everything after step 1 was about the boundary around the call.
+
+---
+
 ## The safety boundary
 
 Giving a language model write access to a real codebase is the part that has to be got right. Three guarantees, each enforced by construction rather than by asking the model nicely:
